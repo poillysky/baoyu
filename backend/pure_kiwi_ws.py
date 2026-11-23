@@ -18,12 +18,13 @@ import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DUOCAI_RE = Path("/Volumes/vol1T/project/cams/duocai/02_模拟器/duocai_py/kiwi_re")
+# kiwi 依赖随仓库携带(backend/kiwi_lib), 不再依赖外部绝对路径
+KIWI_LIB = HERE / "kiwi_lib"
 import sys
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(DUOCAI_RE))
-sys.path.insert(0, str(DUOCAI_RE / "loginlib"))
-sys.path.insert(0, str(DUOCAI_RE / "pure_client"))
+sys.path.insert(0, str(KIWI_LIB))
+sys.path.insert(0, str(KIWI_LIB / "loginlib"))
+sys.path.insert(0, str(KIWI_LIB / "pure_client"))
 
 import duocai_pure as DP
 import pure_guest_login as G
