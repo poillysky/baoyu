@@ -88,6 +88,13 @@ _THUMB_LOCK = threading.Lock()
 _FILES_CACHE = {"t": 0.0, "data": []}   # 成品列表缓存：录制中文件多时避免每次请求全量 glob+ffprobe
 _FILES_CACHE_TTL = 8.0                  # 秒（列表刷新频率上限）
 
+# 录制管理监控根目录：最终归档目录（文件移动归档后的真实存放处），可 env FILES_ROOT 覆盖
+_FILES_ROOT = os.environ.get("FILES_ROOT", C.FINAL_REC_DIR)
+try:
+    os.makedirs(_FILES_ROOT, exist_ok=True)
+except Exception:
+    pass
+
 
 def _probe_duration(path):
     # 防止多个 HTTP 线程同时对同一批视频起 ffprobe，CPU/进程数瞬间放大。
@@ -134,7 +141,7 @@ def _files_list():
         return _FILES_CACHE["data"]
     out = []
     # 递归扫描(一个主播一个文件夹): rel = "主播文件夹/文件名.(webm|mp4)"
-    pats = [os.path.join(C.REC_DIR, "**", "*.webm"), os.path.join(C.REC_DIR, "**", "*.mp4")]
+    pats = [os.path.join(_FILES_ROOT, "**", "*.webm"), os.path.join(_FILES_ROOT, "**", "*.mp4")]
     files = []
     for p in pats:
         files.extend(glob.glob(p, recursive=True))
@@ -146,7 +153,7 @@ def _files_list():
         except OSError:
             continue
     for f, st in sorted(entries, key=lambda x: x[1].st_mtime, reverse=True):
-        rel = os.path.relpath(f, C.REC_DIR).replace(os.sep, "/")
+        rel = os.path.relpath(f, _FILES_ROOT).replace(os.sep, "/")
         parts = rel.split("/")
         # 三级布局 recordings/平台/主播文件夹/文件; 旧二级布局 records/主播/文件 兼容
         plat = parts[0] if len(parts) >= 3 else ""
@@ -163,14 +170,16 @@ def _files_list():
 
 
 # ---- 视频缩略图（ffmpeg 抓首帧，磁盘缓存） ----
-THUMB_DIR = os.path.join(os.path.dirname(C.REC_DIR), ".thumbs")
+THUMB_DIR = os.path.join(os.path.dirname(_FILES_ROOT), ".thumbs")
 os.makedirs(THUMB_DIR, exist_ok=True)
 _FFMPEG = os.environ.get("FFMPEG", "/opt/homebrew/bin/ffmpeg")
 
 
 def _thumb_path(rel):
     import hashlib
-    h = hashlib.md5((rel + "|" + str(int(os.path.getmtime(os.path.join(C.REC_DIR, rel)))) if os.path.exists(os.path.join(C.REC_DIR, rel)) else rel).encode()).hexdigest()
+    _src = os.path.join(_FILES_ROOT, rel)
+    _mt = str(int(os.path.getmtime(_src))) if os.path.exists(_src) else rel
+    h = hashlib.md5((rel + "|" + _mt).encode()).hexdigest()
     return os.path.join(THUMB_DIR, h + ".jpg"), h
 
 
@@ -183,7 +192,7 @@ def _get_thumb(rel):
 def _get_thumb_inner(rel):
     """返回缩略图 jpg 的绝对路径；必要时用 ffmpeg 生成。失败返回 None。"""
     rel = (rel or "").replace("\\", "/").lstrip("/")
-    root = os.path.abspath(C.REC_DIR)
+    root = os.path.abspath(_FILES_ROOT)
     src = os.path.abspath(os.path.join(root, rel))
     if not (src.startswith(root + os.sep) and os.path.isfile(src)):
         return None
@@ -225,7 +234,7 @@ def _stats():
     today_bytes = sum(f["size"] for f in today)
     du = None
     try:
-        st = os.statvfs(C.REC_DIR)
+        st = os.statvfs(_FILES_ROOT)
         du = {"free": st.f_bavail * st.f_frsize, "total": st.f_blocks * st.f_frsize}
     except Exception:
         pass
@@ -390,8 +399,8 @@ def _net_test():
 def _delete_file(name):
     # 支持 "主播文件夹/文件名.mp4" 相对路径; 防目录穿越
     rel = (name or "").replace("\\", "/").lstrip("/")
-    fp = os.path.abspath(os.path.join(C.REC_DIR, rel))
-    if not fp.startswith(os.path.abspath(C.REC_DIR) + os.sep):
+    fp = os.path.abspath(os.path.join(_FILES_ROOT, rel))
+    if not fp.startswith(os.path.abspath(_FILES_ROOT) + os.sep):
         return {"ok": False, "msg": "非法路径"}
     if os.path.isfile(fp):
         try:
@@ -399,7 +408,7 @@ def _delete_file(name):
             # 顺带清掉空的主播目录
             d = os.path.dirname(fp)
             try:
-                if d != os.path.abspath(C.REC_DIR) and not os.listdir(d):
+                if d != os.path.abspath(_FILES_ROOT) and not os.listdir(d):
                     os.rmdir(d)
             except Exception:
                 pass
@@ -416,7 +425,7 @@ def _delete_folder(folder):
     rel = (folder or "").replace("\\", "/").strip().strip("/")
     if not rel or rel in (".", ".."):
         return {"ok": False, "msg": "非法文件夹"}
-    root = os.path.abspath(C.REC_DIR)
+    root = os.path.abspath(_FILES_ROOT)
     fp = os.path.abspath(os.path.join(root, rel))
     # 如果传入的是文件路径(带扩展名)，退化为删除其所在文件夹
     if os.path.isfile(fp):
@@ -940,8 +949,15 @@ class Handler(BaseHTTPRequestHandler):
             if p.startswith("/recordings/"):
                 # 支持子目录: /recordings/主播文件夹/文件名.mp4 (unquote 用模块顶部导入)
                 rel = unquote(p[len("/recordings/"):]).replace("\\", "/").lstrip("/")
-                fp = os.path.abspath(os.path.join(C.REC_DIR, rel))
-                if (fp.startswith(os.path.abspath(C.REC_DIR) + os.sep) and os.path.isfile(fp)):
+                # 优先最终归档目录；暂存目录(录制中/未归档)兜底
+                roots = (os.path.abspath(_FILES_ROOT), os.path.abspath(C.REC_DIR))
+                fp = None
+                for r in roots:
+                    cand = os.path.abspath(os.path.join(r, rel))
+                    if cand.startswith(r + os.sep) and os.path.isfile(cand):
+                        fp = cand
+                        break
+                if fp is not None:
                     dl = q.get("dl", ["0"])[0] == "1"
                     ctype = "video/webm" if fp.lower().endswith(".webm") else "video/mp4"
                     return self._send_file(fp, ctype, download=dl)

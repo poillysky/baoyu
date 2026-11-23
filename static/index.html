@@ -169,7 +169,7 @@
   <nav>
     <button data-page="rooms" class="on">平台列表</button>
     <button data-page="monitor">监控列表</button>
-    <button data-page="files">录制管理</button>
+    <button data-page="files">监控录制</button>
     <button data-page="settings">高级设置</button>
   </nav>
 </header>
@@ -215,10 +215,10 @@
     </div>
   </section>
 
-  <!-- ========== 录制管理 ========== -->
+  <!-- ========== 监控录制 ========== -->
   <section class="page" id="page-files">
     <div class="card">
-      <h2 id="filesTitle">录制管理 <span class="cnt" id="fileCnt2"></span>
+      <h2 id="filesTitle">监控录制 <span class="cnt" id="fileCnt2"></span>
         <span class="grow"></span>
         <input id="fileSearch" type="search" placeholder="搜索当前目录(名称/ID)"
                style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:220px"
@@ -292,7 +292,7 @@
         <b>观看方式</b>: 本页面不内置播放器。平台列表点「复制直链」粘到 VLC / PotPlayer / IINA 观看;<br>
         直链经 /api/stream 代理(自动处理加密 key / HEVC / 防盗链),局域网任意设备可放。<br>
         <b>监控</b>: 平台列表「开始监控」→ 开播自动录、下播自动停;监控列表可开关/删除。<br>
-        成品文件在「录制管理」浏览/删除。
+        成品文件在「监控录制」浏览/删除。
       </div>
     </div>
   </section>
@@ -961,7 +961,7 @@ async function loadRecs(){
 }
 
 /* ---------- 文件(监控列表) ---------- */
-/* ========== 录制管理: hash 路由三级页面(每级独立视图, 点击跳转不平铺) ==========
+/* ========== 监控录制: hash 路由三级页面(每级独立视图, 点击跳转不平铺) ==========
  * hash: #files                         平台列表级
  *       #files/<plat>                  主播列表级
  *       #files/<plat>/<folder>         文件列表级
@@ -1021,7 +1021,7 @@ function renderFilesCrumb(parts){
   const el = document.getElementById("filesCrumb");
   if (!el) return;
   const sep = " <span style='color:var(--sub)'>/</span> ";
-  let html = `<a href="#files" style='color:var(--blue);text-decoration:none'>录制管理</a>`;
+  let html = `<a href="#files" style='color:var(--blue);text-decoration:none'>监控录制</a>`;
   if (parts.length >= 1 && parts[0]){
     html += sep + `<a href="#files/${encodeURIComponent(parts[0])}" style='color:var(--blue);text-decoration:none'>${esc(parts[0])}</a>`;
   }
