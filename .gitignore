@@ -30,9 +30,6 @@ watchlist.json.bak
 .thumbs/
 
 # 前端 next 工程(体积大, 不进镜像不进仓库)
-frontend-next/node_modules/
-frontend-next/.next/
-frontend-next/node_modules
 node_modules/
 
 # 密钥/账号态(敏感, 按需单独挂载)
@@ -41,3 +38,4 @@ backend/account_state.json
 
 # macOS
 .DS_Store
+frontend-next/
