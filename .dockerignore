@@ -1,0 +1,34 @@
+# 录制成品
+recordings/
+agora recordings/
+baoyu recordings/
+agora_recordings/
+final_recordings/
+**/*.mp4
+**/*.webm
+**/*.ts
+
+# Python 缓存/虚拟环境
+**/__pycache__/
+**/*.py[cod]
+backend/.venv*/
+.venv*/
+
+# 运行态/缓存/日志/转储
+**/*.log
+**/*.dmp
+**/*.db
+**/*.db-wal
+**/*.db-shm
+backend/img_cache/
+.thumbs/
+
+# 前端 next 工程(node_modules 巨大, 镜像用不到)
+frontend-next/
+node_modules/
+
+# git / 其他
+.git/
+.gitignore
+.DS_Store
+docs/
