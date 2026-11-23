@@ -22,17 +22,28 @@ ADB = os.environ.get("ADB", "/Users/poilly/Library/Android/sdk/platform-tools/ad
 PKG = "me.hq80tw8.ws04i1m"
 FLUTTER_PREFS = "/data/data/%s/shared_prefs/FlutterSharedPreferences.xml" % PKG
 
-# 优先环境变量 CHROMIUM, 再找本机已装的 playwright chromium(1223/1140), 兜底旧路径
+# 优先环境变量 CHROMIUM; 未指定则跨平台自动探测:
+#  - Linux(Docker): $PLAYWRIGHT_BROWSERS_PATH(默认 /ms-playwright) 下 chromium-*/chrome-linux*/chrome
+#  - macOS: ~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/.../Chrome(或 Google Chrome for Testing)
 CHROMIUM = os.environ.get("CHROMIUM", "")
 if not CHROMIUM:
     import glob as _glob
-    _cands = sorted(_glob.glob(os.path.expanduser(
+    _BP = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
+    _cands = sorted(_glob.glob(os.path.join(_BP, "chromium-*/chrome-linux*/chrome")))
+    _cands += sorted(_glob.glob(os.path.expanduser(
         "~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/**/Google Chrome for Testing"),
-        recursive=True)) + sorted(_glob.glob(os.path.expanduser(
+        recursive=True))
+    _cands += sorted(_glob.glob(os.path.expanduser(
         "~/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium")))
-    CHROMIUM = _cands[-1] if _cands else os.path.expanduser(
-        "~/Library/Caches/ms-playwright/chromium-1140/chrome-mac/Chromium.app/Contents/MacOS/Chromium")
-FFMPEG = os.environ.get("FFMPEG", "/opt/homebrew/bin/ffmpeg")
+    CHROMIUM = _cands[-1] if _cands else ""
+    if not CHROMIUM:
+        # 兜底: 若未找到, 交给 playwright 默认(自动下载目录), 不写死 Mac 路径
+        CHROMIUM = None
+FFMPEG = os.environ.get("FFMPEG", "")
+if not FFMPEG:
+    import shutil as _sh
+    FFMPEG = _sh.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+# ffmpeg 视频编码器: mac 用 videotoolbox 硬编; linux 用 h264 软编/硬编按可用性
 FFMPEG_VENC = os.environ.get("FFMPEG_VENC", "h264_videotoolbox")  # mac 硬编; linux 用 nvenc/libx264
 # ffmpeg(OpenSSL) 用的 CA 包: 部分 CDN(ooat88 系)证书链含自签交叉根, 系统钥匙串判定失败;
 # 显式喂全根包后子请求(hls ts/crypto)继承环境变量即可通过验证。

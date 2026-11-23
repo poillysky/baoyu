@@ -117,7 +117,19 @@ def _save():
         json.dump(list(_WATCH.values()), f, ensure_ascii=False, indent=1)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, WL_PATH)
+    try:
+        os.replace(tmp, WL_PATH)
+    except OSError:
+        # bind-mount 单文件(容器内) os.replace 到挂载 inode 会 EBUSY;
+        # 退化为原地直写挂载文件本身, 保证 watchlist 持久化可用
+        with open(WL_PATH, "w", encoding="utf-8") as f:
+            json.dump(list(_WATCH.values()), f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _watch_snapshot():
