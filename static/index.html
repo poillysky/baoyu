@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鲍鱼盒子 · 管理端</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --border:#e3e6ea; --text:#1f2329; --sub:#6b7280;
+          --blue:#2563eb; --green:#16a34a; --red:#dc2626; --amber:#d97706; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.55 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { background:var(--card); border-bottom:1px solid var(--border); display:flex;
+           align-items:stretch; height:52px; position:sticky; top:0; z-index:5; }
+  header .brand { display:flex; align-items:center; padding:0 18px; font-size:16px; font-weight:600; gap:8px; }
+  nav { display:flex; align-items:stretch; }
+  nav button { border:0; background:none; padding:0 18px; font-size:14px; color:var(--sub);
+               cursor:pointer; border-bottom:2px solid transparent; }
+  nav button:hover { color:var(--text); }
+  nav button.on { color:var(--blue); border-bottom-color:var(--blue); font-weight:600; }
+  main { max-width:1180px; margin:16px auto; padding:0 14px; }
+  .page { display:none; }
+  .page.on { display:block; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          margin-bottom:16px; padding:12px 14px; }
+  .card h2 { font-size:14px; margin:0 0 10px; color:#374151; display:flex; align-items:center; gap:8px; }
+  .card h2 .cnt { color:var(--sub); font-weight:400; }
+  .plats { display:flex; gap:8px; flex-wrap:wrap; }
+  .plat { padding:7px 14px; border:1px solid var(--border); border-radius:8px; background:#fff;
+          cursor:pointer; user-select:none; }
+  .plat:hover { border-color:var(--blue); }
+  .plat.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .plat small { display:block; font-size:11px; opacity:.75; }
+  table { width:100%; border-collapse:collapse; white-space:nowrap; }
+  th,td { text-align:center; padding:9px 14px; border-bottom:1px solid var(--border); font-size:13px; }
+  th { color:var(--sub); font-weight:500; background:#fafbfc; }
+  td.left, th.left { text-align:left; }
+  tr:hover td { background:#f8fafc; }
+  td:first-child, th:first-child { padding-left:16px; }
+  td:last-child, th:last-child { padding-right:16px; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  th.num { text-align:right; }
+  /* 等宽可读表格: 列间距协调 */
+  .tbl { border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  .tbl table { border:0; }
+  /* 手机窄屏: 表格不换行, 横向滚动 */
+  .tbl-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .tbl-wrap table { min-width:620px; }
+  .tbl-wrap th, .tbl-wrap td { white-space:nowrap; }
+  .cell-ops { white-space:normal; }
+  .cell-ops .btn { margin:2px 4px 2px 0; }
+  .cell-name { max-width:300px; overflow:hidden; text-overflow:ellipsis; text-align:left; }
+  .cell-name b { margin-right:6px; }
+  th.cell-name { text-align:left; }
+  .btn { display:inline-block; padding:4px 12px; border:1px solid var(--border); border-radius:6px;
+         background:#fff; cursor:pointer; font-size:12px; }
+  .btn:hover { border-color:#94a3b8; }
+  .btn.blue { color:var(--blue); border-color:#bfdbfe; }
+  .btn.red { color:var(--red); border-color:#fecaca; }
+  .btn.green { color:var(--green); border-color:#bbf7d0; }
+  .btn.amber { color:var(--amber); border-color:#fde68a; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  /* 设置页子 Tab */
+  .sub-tabs { display:flex; flex-wrap:wrap; gap:8px; }
+  .sub-tabs button { border:1px solid var(--border); background:#fff; color:var(--sub);
+           padding:6px 14px; border-radius:99px; font-size:13px; cursor:pointer; transition:.15s; }
+  .sub-tabs button:hover { border-color:#94a3b8; color:var(--text); }
+  .sub-tabs button.on { background:var(--blue); border-color:var(--blue); color:#fff; font-weight:600; }
+  .row { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px dashed var(--border); font-size:13.5px; }
+  .row:last-child { border-bottom:0; }
+  .row .lb { width:150px; color:var(--sub); flex-shrink:0; }
+  .row .val { flex:1; min-width:0; }
+  .row input[type=text], .row input[type=number], .row input[type=password] {
+           padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:100%; box-sizing:border-box; }
+  .row input[type=number] { width:110px; }
+  .mini-btn { padding:5px 14px; border:1px solid var(--border); border-radius:6px; background:#fff;
+           font-size:12.5px; cursor:pointer; }
+  .mini-btn.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .mini-btn.red { color:var(--red); border-color:#fecaca; }
+  .seg { display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .seg button { border:0; background:#fff; padding:6px 16px; font-size:13px; cursor:pointer; color:var(--sub); }
+  .seg button + button { border-left:1px solid var(--border); }
+  .seg button.on { background:var(--blue); color:#fff; font-weight:600; }
+  .test-row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px dashed var(--border); font-size:13px; }
+  .test-row:last-child { border-bottom:0; }
+  .test-ic { width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+           font-size:13px; font-weight:700; background:#f1f5f9; color:#94a3b8; flex-shrink:0; }
+  .test-ic.ok { background:#dcfce7; color:var(--green); }
+  .test-ic.bad { background:#fee2e2; color:var(--red); }
+  /* 延迟数字: 无勾选图标, 纯色 */
+  .lat { font-variant-numeric:tabular-nums; font-size:13.5px; }
+  .lat.ok { color:var(--green); }
+  .lat.bad { color:var(--red); }
+  .test-row .nm { flex:1; min-width:0; }
+  .test-row .nm b { display:block; font-size:13px; }
+  .test-row .nm small { color:var(--sub); }
+  .test-row .ms { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--green); }
+  .test-row .ms.bad { color:var(--red); }
+  .help { font-size:12px; color:var(--sub); line-height:1.7; padding:4px 0; }
+  .help b { color:var(--text); }
+  .tag { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; background:#eef2ff; color:#3730a3; }
+  .tag.online { background:#ecfdf5; color:#047857; }
+  .tag.stop { background:#fef2f2; color:#b91c1c; }
+  .tag.rec { background:#fffbeb; color:#b45309; }
+  .tag.off { background:#f3f4f6; color:#6b7280; }
+  .rec-badge { display:inline-block; padding:2px 10px; border-radius:99px; font-size:12px;
+               background:#fffbeb; color:#b45309; border:1px solid #fde68a;
+               font-weight:600; white-space:nowrap; }
+  @keyframes recpulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+  .rec-badge { animation:recpulse 1.6s infinite; }
+  #toast { position:fixed; top:64px; left:50%; transform:translateX(-50%) translateY(-12px);
+           background:#fff; color:var(--text); border:1px solid var(--border); border-left-width:4px;
+           border-radius:10px; padding:10px 20px 10px 40px; font-size:13px; line-height:1.5;
+           opacity:0; pointer-events:none; transition:.22s cubic-bezier(.2,.9,.3,1.05);
+           z-index:30; max-width:82vw; word-break:break-all; white-space:pre-line;
+           box-shadow:0 10px 30px rgba(17,24,39,.18); }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  #toast::before { content:"ℹ"; position:absolute; left:12px; top:50%; transform:translateY(-50%);
+           width:19px; height:19px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+           font-size:11px; font-weight:700; color:#fff; background:var(--blue); }
+  #toast.ok { border-left-color:var(--green); }
+  #toast.ok::before { content:"✓"; background:var(--green); box-shadow:0 0 0 3px rgba(22,163,74,.15); }
+  #toast.err { border-left-color:var(--red); }
+  #toast.err::before { content:"✗"; background:var(--red); box-shadow:0 0 0 3px rgba(220,38,38,.15); }
+  #toast.info { border-left-color:var(--blue); }
+  /* 确认弹窗 */
+  .modal-mask { position:fixed; inset:0; background:rgba(17,24,39,.45); z-index:20;
+                display:flex; align-items:center; justify-content:center; animation:maskIn .15s ease; }
+  .modal-box { background:var(--card); border:1px solid var(--border); border-radius:12px;
+               width:min(420px, 92vw); padding:22px 24px 18px; box-shadow:0 18px 50px rgba(0,0,0,.28);
+               animation:boxIn .16s ease; }
+  .modal-title { font-size:16px; font-weight:600; margin-bottom:10px; }
+  .modal-title.danger { color:var(--red); }
+  .modal-text { color:var(--sub); font-size:14px; line-height:1.6; word-break:break-all; margin-bottom:18px; }
+  .modal-ops { display:flex; justify-content:flex-end; gap:10px; }
+  .modal-ops .btn { min-width:86px; padding:8px 16px; font-size:14px; }
+  @keyframes maskIn { from{opacity:0} to{opacity:1} }
+  @keyframes boxIn { from{opacity:0; transform:scale(.96) translateY(6px)} to{opacity:1; transform:none} }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  .flex { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .grow { flex:1; }
+  .empty { color:var(--sub); text-align:center; padding:22px 0; }
+  .wrap td { white-space:normal; word-break:break-all; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; background:#9ca3af; }
+  .dot.ok { background:var(--green); } .dot.bad { background:var(--red); }
+  /* 开关 */
+  .switch { position:relative; display:inline-block; width:38px; height:22px; vertical-align:middle; }
+  .switch input { opacity:0; width:0; height:0; }
+  .switch .slider { position:absolute; inset:0; background:#cbd5e1; border-radius:99px; transition:.2s; cursor:pointer; }
+  .switch .slider:before { content:""; position:absolute; width:16px; height:16px; left:3px; top:3px;
+        background:#fff; border-radius:50%; transition:.2s; box-shadow:0 1px 2px rgba(0,0,0,.2); }
+  .switch input:checked + .slider { background:var(--green); }
+  .switch input:checked + .slider:before { transform:translateX(16px); }
+  .kv { display:grid; grid-template-columns:150px 1fr; gap:6px 12px; font-size:13px; }
+  .kv b { color:var(--sub); font-weight:500; }
+  .note { background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:10px 14px;
+          font-size:12.5px; color:#92400e; line-height:1.7; }
+  .fgroup { border:1px solid var(--border); border-radius:8px; margin-bottom:10px; overflow:hidden; }
+  .fgroup > h3 { margin:0; padding:8px 12px; font-size:13px; background:#f8fafc; border-bottom:1px solid var(--border);
+                 display:flex; align-items:center; gap:8px; }
+  .fgroup > h3 .fn { color:var(--sub); font-weight:400; font-size:12px; }
+  .fgroup table { border-collapse:collapse; width:100%; }
+  .fgroup td:first-child { padding-left:12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">鲍鱼盒子</div>
+  <nav>
+    <button data-page="rooms" class="on">平台列表</button>
+    <button data-page="monitor">监控列表</button>
+    <button data-page="files">录制管理</button>
+    <button data-page="settings">高级设置</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ========== 平台列表 ========== -->
+  <section class="page on" id="page-rooms">
+    <div class="card">
+      <h2>平台</h2>
+      <div class="plats" id="plats"></div>
+    </div>
+    <div class="card">
+      <h2>房间 <span class="cnt" id="roomCnt"></span>
+        <span class="grow"></span>
+        <input id="roomSearch" type="search" placeholder="搜索房间(主播名/ID)" style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:200px" oninput="renderRoomsBody()">
+        <span class="muted" style="color:var(--sub);font-weight:400;font-size:12px" id="roomNote"></span>
+      </h2>
+      <div style="overflow-x:auto">
+        <div class="tbl">
+        <table>
+          <thead><tr>
+            <th class="cell-name">主播</th><th style="width:88px">在线</th><th class="num" style="width:74px">观看</th><th style="width:240px">直链 / 凭证</th><th style="width:110px">监控</th>
+          </tr></thead>
+          <tbody id="roomBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 监控列表 ========== -->
+  <section class="page" id="page-monitor">
+    <div class="card">
+      <h2>录制任务 <span class="cnt" id="recCnt"></span></h2>
+      <div style="overflow-x:auto">
+        <div class="tbl">
+        <table>
+          <thead><tr><th style="width:52px"></th><th class="cell-name">主播</th><th style="width:76px">平台</th><th style="width:96px">状态</th><th class="num" style="width:96px">时长</th><th class="num" style="width:92px">大小</th><th style="width:80px">方式</th><th style="width:180px" class="cell-ops">操作</th></tr></thead>
+          <tbody id="recBody"><tr><td colspan="8" class="empty">无监控房间</td></tr></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 录制管理 ========== -->
+  <section class="page" id="page-files">
+    <div class="card">
+      <h2 id="filesTitle">录制管理 <span class="cnt" id="fileCnt2"></span>
+        <span class="grow"></span>
+        <input id="fileSearch" type="search" placeholder="搜索当前目录(名称/ID)"
+               style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:220px"
+               oninput="renderFilesView()">
+        <span class="muted" id="fileSearchInfo" style="color:var(--sub);font-size:12px"></span>
+        <button class="btn" onclick="refreshFiles()">刷新</button>
+      </h2>
+      <div id="filesCrumb" style="margin-bottom:8px;font-size:13px"></div>
+      <div id="fileGroups"></div>
+    </div>
+  </section>
+
+  <!-- ========== 高级设置 ========== -->
+  <section class="page" id="page-settings">
+    <div class="card">
+      <div class="sub-tabs" id="settingsTabs">
+        <button class="on" data-sub="overview">总览</button>
+        <button data-sub="account">账号登录</button>
+        <button data-sub="record">录制设置</button>
+        <button data-sub="network">网络管理</button>
+        <button data-sub="nettest">网络测试</button>
+        <button data-sub="cache">缓存管理</button>
+        <button data-sub="platforms">平台接入说明</button>
+      </div>
+    </div>
+    <div class="card sub-card" id="sub-overview">
+      <h2>系统总览</h2>
+      <div class="kv" id="sysKv"></div>
+    </div>
+    <div class="card sub-card" id="sub-account" style="display:none">
+      <h2>账号登录</h2>
+      <div id="accountBox"></div>
+    </div>
+    <div class="card sub-card" id="sub-record" style="display:none">
+      <h2>录制设置</h2>
+      <div id="recordBox"></div>
+    </div>
+    <div class="card sub-card" id="sub-network" style="display:none">
+      <h2>网络管理</h2>
+      <div id="networkBox"></div>
+    </div>
+    <div class="card sub-card" id="sub-nettest" style="display:none">
+      <h2>网络测试 <button class="mini-btn primary" id="netTestBtn" onclick="runNetTestStart()" style="margin-left:10px">开始测试</button></h2>
+      <div class="tbl-wrap"><table id="nettestTbl" class="tbl">
+        <thead><tr><th class="cell-name">项目</th><th class="cell-name">地址</th><th style="width:110px">延迟</th></tr></thead>
+        <tbody id="nettestBody"></tbody>
+      </table></div>
+      <div id="nettestBox"></div>
+    </div>
+    <div class="card sub-card" id="sub-cache" style="display:none">
+      <h2>缓存管理</h2>
+      <div id="cacheBox"></div>
+    </div>
+    <div class="card sub-card" id="sub-platforms" style="display:none">
+      <h2>平台接入说明</h2>
+      <table>
+        <thead><tr><th class="cell-name">ID</th><th>平台</th><th>拉流形态</th><th style="width:64px">播放</th><th style="width:64px">录制</th><th>接入方式</th></tr></thead>
+        <tbody>
+          <tr><td>449</td><td>半糖</td><td>Agora</td><td>✓</td><td>✓</td><td>007e 签名 · web 录制</td></tr>
+          <tr><td>383</td><td>小妲己</td><td>FLV/HEVC</td><td>✓</td><td>✓</td><td>getPrivateLimit 解密 → 直链直录</td></tr>
+          <tr><td>440</td><td>番茄</td><td>HLS(AES-128)</td><td>✓</td><td>✓</td><td>key 解密代理(全站唯一 key)</td></tr>
+          <tr><td>455</td><td>杏仁</td><td>FLV</td><td>✓</td><td>✓</td><td>wsSecret 直链直录</td></tr>
+          <tr><td>472</td><td>青瑶</td><td>FLV</td><td>✓</td><td>✓</td><td>wsSecret 直链直录</td></tr>
+          <tr><td>460</td><td>草莓</td><td>FLV</td><td>✓</td><td>✓</td><td>wsSecret 直链直录</td></tr>
+          <tr><td>474</td><td>密语</td><td>Agora</td><td>✓</td><td>✓</td><td>token 直给 · web 录制</td></tr>
+          <tr><td>473</td><td>Hot51</td><td>-</td><td>✗</td><td>✗</td><td>网关无 detail 路由(未接入)</td></tr>
+          <tr><td>475</td><td>Swag</td><td>-</td><td>✗</td><td>✗</td><td>网关无 detail 路由(未接入)</td></tr>
+        </tbody>
+      </table>
+      <div class="note" style="margin-top:10px">
+        <b>观看方式</b>: 本页面不内置播放器。平台列表点「复制直链」粘到 VLC / PotPlayer / IINA 观看;<br>
+        直链经 /api/stream 代理(自动处理加密 key / HEVC / 防盗链),局域网任意设备可放。<br>
+        <b>监控</b>: 平台列表「开始监控」→ 开播自动录、下播自动停;监控列表可开关/删除。<br>
+        成品文件在「录制管理」浏览/删除。
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const PLATS = [
+  [449, "半糖", "Agora"],
+  [383, "小妲己", "FLV/HEVC"],
+  [440, "番茄", "HLS(已解密)"],
+  [455, "杏仁", "FLV"],
+  [472, "青瑶", "FLV"],
+  [460, "草莓", "FLV"],
+  [474, "密语", "Agora"],
+  [473, "Hot51", "未接入"],
+  [475, "Swag", "未接入"],
+];
+let state = { pid: 449, rooms: [], recs: [], files: [], counts: {}, curFolder: null, curPlat: null, activeRecs: {}, watchSet: {} };
+
+const $ = s => document.querySelector(s);
+/* toast(t, ms): 自动分类样式 — ✗/失败/异常→红色err, ✓/已→绿色ok, 其余→蓝色info */
+function toast(t, ms = 2600){
+  const el = $("#toast");
+  el.textContent = t;
+  el.classList.remove("ok", "err", "info");
+  const s = String(t);
+  if (/^(✗|×)|失败|异常|错误|后端返回/.test(s)) el.classList.add("err");
+  else if (/^(✓|已|成功|已复制)/.test(s)) el.classList.add("ok");
+  else el.classList.add("info");
+  el.classList.add("show");
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), ms);
+}
+
+/* 自定义确认弹窗: 返回 Promise<boolean>; 支持标题(title), 正文(text), 危险模式(danger→红标题+红按钮) */
+function confirmBox(opts){
+  opts = opts || {};
+  return new Promise(resolve => {
+    let done = false;
+    const close = v => { if (done) return; done = true;
+      document.removeEventListener("keydown", onKey);
+      mask.remove(); resolve(v); };
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    mask.innerHTML = `
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <div class="modal-title ${opts.danger ? "danger" : ""}">${esc(opts.title || "确认")}</div>
+        <div class="modal-text">${esc(opts.text || "")}</div>
+        <div class="modal-ops">
+          <button class="btn" data-cancel="1">${esc(opts.cancel || "取消")}</button>
+          <button class="btn ${opts.danger ? "red" : "blue"}" data-ok="1">${esc(opts.ok || "确定")}</button>
+        </div>
+      </div>`;
+    mask.addEventListener("click", e => { if (e.target === mask) close(false); });
+    mask.querySelector("[data-cancel]").onclick = () => close(false);
+    mask.querySelector("[data-ok]").onclick = () => close(true);
+    const onKey = e => { if (e.key === "Escape") close(false);
+      if (e.key === "Enter" && !e.shiftKey) close(true); };
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(mask);
+    const okBtn = mask.querySelector("[data-ok]");
+    okBtn.focus();
+  });
+}
+function fmtSize(b){
+  if (!b) return "-";
+  if (b > 1 << 30) return (b / (1 << 30)).toFixed(2) + " GB";
+  if (b > 1 << 20) return (b / (1 << 20)).toFixed(1) + " MB";
+  return (b / 1024).toFixed(0) + " KB";
+}
+function fmtTime(ts){
+  if (!ts) return "-";
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fmtDur(sec){
+  if (!sec) return "-";
+  const m = Math.floor(sec / 60); const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+function fmtDurFull(sec){
+  if (!sec || sec < 0) return "-";
+  const total = Math.round(sec); // 先取整再分解, 避免 59.8s -> 9:60
+  const h = Math.floor(total / 3600), m = Math.floor(total % 3600 / 60), s = total % 60;
+  const p = n => String(n).padStart(2, "0");
+  return h ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
+}
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  const ct = (r.headers.get("content-type") || "");
+  if (ct.includes("json")) return { status: r.status, json: await r.json() };
+  return { status: r.status, text: await r.text() };
+}
+function esc(s){ return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function enc(s){ return encodeURIComponent(String(s || "")); }
+
+/* ---------- 导航 ---------- */
+document.querySelectorAll("nav button").forEach(b => {
+  b.onclick = () => switchPage(b.dataset.page);
+});
+function switchPage(name){
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x.dataset.page === name));
+  document.querySelectorAll(".page").forEach(x => x.classList.toggle("on", x.id === "page-" + name));
+  if (name === "monitor"){ loadRecs(); }
+  if (name === "files"){ refreshFiles(); }
+  if (name === "settings"){ checkHealth(); }
+  // 回平台列表: 刷新一次房间列表+活跃录制态, 按钮立即反映是否在录
+  if (name === "rooms"){ loadRooms(); }
+}
+
+/* ---------- 系统状态(高级设置) ---------- */
+async function checkHealth(){
+  let html = "";
+  try {
+    const { status, json } = await api("/api/health");
+    const ok = status === 200 && json && json.ok;
+    html += `<b>后端</b><span><span class="dot ${ok ? "ok" : "bad"}"></span> ${ok ? "正常运行" : "异常"}</span>`;
+    html += `<b>网关</b><span>${json && json.gw ? (json.gw.ok ? "接通" : "断开") : "-"} · ${(json && json.gw && json.gw.server) || "-"}</span>`;
+    html += `<b>账号令牌</b><span>${json && json.token ? "有效" : "失效(等待恢复)"}</span>`;
+  } catch (e) {
+    html += `<b>后端</b><span><span class="dot bad"></span> 无法连接</span>`;
+  }
+  html += `<b>本页地址</b><span class="mono">${location.href}</span>`;
+  html += `<b>接口基址</b><span class="mono">${location.origin}</span>`;
+  html += `<b>录制分片端口</b><span class="mono">8903 (WebSocket)</span>`;
+  html += `<b>实时推送端口</b><span class="mono">8902 (WebSocket)</span>`;
+  $("#sysKv").innerHTML = html;
+}
+
+/* ========== 高级设置: 子页面 Tab 切换 ========== */
+let settingsSub = "overview";
+function switchSettingsSub(name){
+  settingsSub = name || "overview";
+  const tabs = document.querySelectorAll("#settingsTabs button");
+  tabs.forEach(b => b.classList.toggle("on", b.dataset.sub === settingsSub));
+  document.querySelectorAll(".sub-card").forEach(c => {
+    c.style.display = c.id === "sub-" + settingsSub ? "" : "none";
+  });
+  if (settingsSub === "account") loadAccount();
+  if (settingsSub === "record") loadRecordMode();
+  if (settingsSub === "network") loadNetwork();
+  if (settingsSub === "nettest") renderNetTbl(null); // 进入即显示常驻表格(待测状态)
+  if (settingsSub === "cache") loadCache();
+  if (settingsSub === "overview") checkHealth();
+}
+document.querySelectorAll("#settingsTabs button").forEach(b => {
+  b.onclick = () => switchSettingsSub(b.dataset.sub);
+});
+
+/* ---------- 子页: 账号登录 ---------- */
+async function loadAccount(){
+  const box = $("#accountBox"); if (!box) return;
+  const { status, json } = await api("/api/login/status");
+  const d = (status === 200 && json && json.data) ? json.data : {};
+  const info = d.account_info || {};
+  let html = "";
+  if (d.has_account && d.account_active){
+    html += `<div class="row"><span class="lb">当前账号</span><span class="val"><b>${esc(info.mobile || info.nickname || "已登录")}</b>
+      <span class="tag">${d.guest_active ? "游客" : "会员"}</span></span></div>`;
+    html += `<div class="row"><span class="lb">登录方式</span><span class="val">${esc(info.login_type || "-")}</span></div>`;
+    html += `<div class="row"><span class="lb">登录时间</span><span class="val">${info.login_at ? fmtTime(info.login_at) : "-"}</span></div>`;
+    html += `<div class="row"><span class="lb">操作</span><span class="val">
+      <button class="mini-btn red" onclick="doLogout()">退出登录</button>
+      <button class="mini-btn" onclick="doGuest()">切换游客号</button>
+      </span></div>`;
+  } else {
+    html += `<div class="row"><span class="lb">账号密码</span><span class="val">
+      <input type="text" id="accMobile" placeholder="手机号">
+      <input type="password" id="accPass" placeholder="密码" style="margin-top:6px">
+      </span></div>`;
+    html += `<div class="row"><span class="lb">操作</span><span class="val">
+      <button class="mini-btn primary" onclick="doLogin()">登录</button>
+      <button class="mini-btn" onclick="doGuest()">使用游客号</button>
+      </span></div>`;
+    if (d.has_account){
+      html += `<div class="row"><span class="lb">已存账号</span><span class="val">有账号 token 未激活
+        <button class="mini-btn primary" onclick="doUseAccount()">切换为会员身份</button>
+        </span></div>`;
+    }
+  }
+  html += `<div class="help">会员账号: 登录后按账号身份访问(不限次数); 游客: 按出口 IP 每日限制次数。头部账号密码两个输入框在未登录时显示。</div>`;
+  box.innerHTML = html;
+}
+async function doLogin(){
+  const m = $("#accMobile").value.trim(), p = $("#accPass").value;
+  if (!m || !p){ toast("请输入手机号和密码"); return; }
+  const { status, json } = await api(`/api/login/account?mobile=${enc(m)}&password=${enc(p)}&login_type=mobile`);
+  const d = json || {};
+  toast(d.ok ? "✓ 登录成功" : "✗ " + (d.msg || "登录失败"), 3000);
+  loadAccount();
+}
+async function doLogout(){
+  if (!await confirmBox({ title: "退出登录", text: "退出当前会员账号,切换为游客身份?", danger: true })) return;
+  const { json } = await api("/api/login/logout");
+  toast(json && json.ok ? "已退出" : "退出失败");
+  loadAccount();
+}
+async function doGuest(){
+  const { json } = await api("/api/login/guest_new");
+  toast(json && json.ok ? "✓ 已切换新游客号" : "✗ " + ((json && json.msg) || "换号失败"));
+  loadAccount();
+}
+async function doUseAccount(){
+  const { json } = await api("/api/login/use_account");
+  toast(json && json.ok ? "✓ 已切换为会员身份" : "✗ " + ((json && json.msg) || "切换失败"));
+  loadAccount();
+}
+
+/* ---------- 子页: 录制设置 ---------- */
+let recMode = null;
+async function loadRecordMode(){
+  const box = $("#recordBox"); if (!box) return;
+  const { status, json } = await api("/api/settings/mode");
+  recMode = (status === 200 && json && json.data) ? json.data : null;
+  if (!recMode){ box.innerHTML = `<div class="empty">加载失败</div>`; return; }
+  let html = "";
+  html += `<div class="row"><span class="lb">画质</span><span class="val">最大画质
+    <span style="color:var(--sub)">(按上游最大分辨率/码率/帧率, 不分档)</span></span></div>`;
+  html += `<div class="row"><span class="lb">码率上限</span><span class="val">${(recMode.video_bitrate / 1000000).toFixed(1)} Mbps
+    <span style="color:var(--sub)">(上限, 实际按源流)</span></span></div>`;
+  html += `<div class="row"><span class="lb">帧率上限</span><span class="val">${recMode.capture_fps} fps
+    <span style="color:var(--sub)">(上限, 实际按源流)</span></span></div>`;
+  html += `<div class="row"><span class="lb">h264 直出</span><span class="val">
+    <label class="switch"><input type="checkbox" id="tfSwitch" ${recMode.transcode_fast ? "checked":""} onchange="setTranscode(this.checked)"><span class="slider"></span></label>
+    <span style="color:var(--sub)">${recMode.transcode_fast ? "直通(零转码)" : "实时转码(兼容)"}</span></span></div>`;
+  html += `<div class="row"><span class="lb">单浏览器多 Tab</span><span class="val">
+    <label class="switch"><input type="checkbox" id="sbSwitch" ${recMode.single_browser ? "checked":""} onchange="setSingleBrowser(this.checked)"><span class="slider"></span></label>
+    <span style="color:var(--sub)">${recMode.single_browser ? "省资源" : "每房独立进程"}</span></span></div>`;
+  html += `<div class="row"><span class="lb">最大并发</span><span class="val">
+    <input type="number" id="maxConc" value="${recMode.max_concurrent}" min="1" max="30">
+    <button class="mini-btn" onclick="setMaxConc()">保存</button></span></div>`;
+  html += `<div class="help">录制不分画质档, 按上游源最大 分辨率/码率/帧率 原样保存; 直录(FLV/HLS)零转码, Web(Agora)浏览器环节按上限采集。新录制任务生效。</div>`;
+  box.innerHTML = html;
+}
+async function setTranscode(v){
+  api(`/api/settings/mode?transcode_fast=${v ? 1 : 0}`).then(r => {
+    toast(r.json && r.json.ok ? "✓ 已更新" : "✗ 保存失败"); loadRecordMode();
+  });
+}
+async function setSingleBrowser(v){
+  api(`/api/settings/mode?single_browser=${v ? 1 : 0}`).then(r => {
+    toast(r.json && r.json.ok ? "✓ 已更新" : "✗ 保存失败"); loadRecordMode();
+  });
+}
+async function setMaxConc(){
+  const v = parseInt($("#maxConc").value, 10);
+  if (!v || v < 1){ toast("并发数非法"); return; }
+  const { json } = await api(`/api/settings/mode?max_concurrent=${v}`);
+  toast(json && json.ok ? "✓ 并发已保存" : "✗ 保存失败");
+  loadRecordMode();
+}
+
+/* ---------- 子页: 网络管理 ---------- */
+async function loadNetwork(){
+  const box = $("#networkBox"); if (!box) return;
+  const { status, json } = await api("/api/settings/network");
+  const d = (status === 200 && json && json.data) ? json.data : {};
+  const proxy = d.proxy || {};
+  let html = "";
+  html += `<div class="row"><span class="lb">走代理</span><span class="val">
+    <label class="switch"><input type="checkbox" id="proxySw" ${proxy.proxy_enabled ? "checked":""} onchange="setProxyToggle(this.checked)"><span class="slider"></span></label>
+    <span style="color:var(--sub)">${proxy.proxy_enabled ? "已开启" : "已关闭"}</span></span></div>`;
+  html += `<div class="row"><span class="lb">代理地址</span><span class="val">
+    <input type="text" id="proxyUrl" value="${esc(proxy.proxy_url || "")}" placeholder="http://127.0.0.1:7897" style="width:320px">
+    <button class="mini-btn" onclick="saveProxyUrl()">保存</button></span></div>`;
+  html += `<div class="row"><span class="lb">网关</span><span class="val">${d.gw ? (d.gw.ok ? "<span class='tag'>接通</span>" : "<span class='tag'>断开</span>") + " · " + esc(d.gw.server || "") : "-"}</span></div>`;
+  html += `<div class="row"><span class="lb">账号身份</span><span class="val">${d.is_member ? "会员" : "游客"} · 令牌 ${d.token ? "有效" : "失效"}</span></div>`;
+  // ---- Agora 原生录制服务(同机 NAS 部署) ----
+  const ag = d.agora || {};
+  html += `<div class="row" style="margin-top:14px;border-top:1px dashed var(--line);padding-top:14px"><span class="lb">原生录制</span><span class="val">
+    <label class="switch"><input type="checkbox" id="agoraSw" ${ag.enabled ? "checked":""} onchange="saveAgora()"><span class="slider"></span></label>
+    <span style="color:var(--sub)">${ag.enabled ? "已启用(密语等走原生)" : "已关闭(走Web录制)"}</span></span></div>`;
+  html += `<div class="row"><span class="lb">Agora 服务地址</span><span class="val">
+    <input type="text" id="agoraHost" value="${esc(ag.host || "")}" placeholder="192.168.2.38" style="width:150px">
+    <span style="color:var(--sub)">:</span>
+    <input type="text" id="agoraPort" value="${esc(String(ag.port||8080))}" placeholder="8080" style="width:70px">
+    ${ag.base_url ? "<span style='color:var(--sub)'>· " + esc(ag.base_url) + "</span>" : ""}</span></div>`;
+  html += `<div class="row"><span class="val"><button class="mini-btn" onclick="saveAgora()">保存 Agora 配置</button></span></div>`;
+  html += `<div class="help">Agora 服务与本项目同 NAS 部署: 项目按地址连服务开录; 录制输出/暂存/归档三目录由 compose 挂载(固态跑持续录制, 机械盘存归档), 页面无需配路径。仅对标准 Agora 平台(密语/474)生效; 半糖原生录不到, 仍走 Web。</div>`;
+  html += `<div class="help" style="margin-top:8px">代理仅影响封面/业务 HTTP 抓取; 签权隧道、拉流为公网直连,不经代理。</div>`;
+  box.innerHTML = html;
+}
+async function setProxyToggle(v){
+  const { json } = await api(`/api/settings/proxy?enabled=${v ? 1 : 0}`);
+  toast(json && json.ok ? (v ? "✓ 已开启代理" : "已关闭代理") : "✗ 设置失败");
+  loadNetwork();
+}
+async function saveProxyUrl(){
+  const url = $("#proxyUrl").value.trim();
+  const { json } = await api(`/api/settings/proxy?enabled=1&url=${enc(url)}`);
+  toast(json && json.ok ? "✓ 代理地址已保存" : "✗ 保存失败");
+  loadNetwork();
+}
+async function saveAgora(){
+  const enabled = $("#agoraSw") && $("#agoraSw").checked ? 1 : 0;
+  const host = $("#agoraHost") ? $("#agoraHost").value.trim() : "";
+  const port = $("#agoraPort") ? $("#agoraPort").value.trim() : "";
+  const { json } = await api(`/api/settings/agora?enabled=${enabled}&host=${enc(host)}&port=${enc(port)}`);
+  toast(json && json.ok ? "✓ Agora 配置已保存" : "✗ 保存失败");
+  loadNetwork();
+}
+
+/* 默认探测项常驻表格(地址/延迟), 点开始测试只刷新延迟列 */
+const NET_PROBES = [
+  ["签权隧道 (UDP/KCP)", "162.14.199.148:9875"],
+  ["bootstrap 节点池 (UDP)", "43.199.86.204:8003"],
+  ["业务 API (TCP)", "103.44.236.131:8001"],
+  ["业务接口 (AES协议)", "103.44.236.131:8001/platforms"],
+  ["Agora 媒体边缘 (TCP:443)", "ap-web-1-asia / ap-proxy-1"],
+  ["封面图床 IPv6 (华为ens边缘)", "yn7ux.ooat88.com"],
+  ["封面图床 IPv4 (阿里CDN回源)", "yn7ux.ooat88.com"],
+  ["DNS 双栈记录", "yn7ux.ooat88.com AAAA×6 A×12"],
+];
+function renderNetTbl(results){
+  const body = $("#nettestBody"); if (!body) return;
+  const rows = results || NET_PROBES.map(([n, t]) => ({ name: n, target: t, ok: null, ms: null }));
+  let html = "";
+  rows.forEach((r, i) => {
+    const st = r.ok === null ? `<span style="color:var(--sub)">—</span>`
+      : (r.ok ? `<b class="lat ok">${r.ms}ms</b>` : `<b class="lat bad">${r.msg || "失败"}</b>`);
+    html += `<tr>
+      <td class="left"><b>${esc(r.name || NET_PROBES[i][0])}</b></td>
+      <td class="mono" style="color:var(--sub)">${esc(r.target || NET_PROBES[i][1])}</td>
+      <td>${st}</td></tr>`;
+  });
+  body.innerHTML = html;
+}
+async function runNetTestStart(){
+  const btn = $("#netTestBtn"); if (btn){ btn.disabled = true; btn.textContent = "测试中…"; }
+  renderNetTbl(null);   // 常驻表格: 延迟列置空, 等结果
+  try {
+    const { json } = await api("/api/settings/nettest");
+    const results = (json && json.data && json.data.results) || [];
+    renderNetTbl(results);
+    const all = results.length && results.every(r => r.ok);
+    const box = $("#nettestBox");
+    if (box) box.innerHTML = `<div class="help"><b>结论</b>: ${all ? "全部链路可达 ✅" : "存在不可达项 ⚠️"}</div>`;
+  } catch (e) {
+    const box = $("#nettestBox");
+    if (box) box.innerHTML = `<div class="empty">测试失败: ${esc(e.message)}</div>`;
+  }
+  if (btn){ btn.disabled = false; btn.textContent = "重新测试"; }
+}
+
+/* ---------- 子页: 缓存管理 ---------- */
+async function loadCache(){
+  const box = $("#cacheBox"); if (!box) return;
+  const { status, json } = await api("/api/settings/cache");
+  const d = (status === 200 && json && json.data) ? json.data : {};
+  box.innerHTML = `<div class="row"><span class="lb">图片缓存</span><span class="val">${d.count || 0} 张 · ${fmtSize(d.size_bytes || 0)}</span></div>
+    <div class="row"><span class="lb">操作</span><span class="val"><button class="mini-btn red" onclick="clearCacheNow()">清空缓存</button></span></div>
+    <div class="help">平台封面/主播头像本地持久化,首次拉取后不再请求上游。<br>清空后下次访问重新拉取。</div>`;
+}
+async function clearCacheNow(){
+  if (!await confirmBox({ title: "清空图片缓存", text: "确定清空全部封面图片缓存?", danger: true })) return;
+  const { json } = await api("/api/settings/cache?clear=1");
+  const d = (json && json.data) || {};
+  toast(json && json.ok ? `✓ 已清除 ${d.cleared || 0} 张缓存` : "✗ 清空失败");
+  loadCache();
+}
+
+/* ---------- 平台(平台列表) ---------- */
+function renderPlats(){
+  const box = $("#plats"); box.innerHTML = "";
+  for (const [pid, name, note] of PLATS){
+    const d = document.createElement("div");
+    d.className = "plat" + (pid === state.pid ? " on" : "");
+    const cnt = (state.counts && state.counts[pid]) || "";
+    d.innerHTML = `<b>${name}${cnt ? " · " + cnt : ""}</b><small>${note}</small>`;
+    d.onclick = () => { state.pid = pid; renderPlats(); loadRooms(); };
+    box.appendChild(d);
+  }
+}
+
+/* 常驻房间数: 并发拉全部平台列表长度, 平台卡一直显示 */
+async function loadAllCounts(){
+  const jobs = PLATS.map(async ([pid]) => {
+    try {
+      const { json } = await api(`/api/rooms?pid=${pid}&type=0`);
+      const n = ((json || {}).data || []).length;
+      if (n >= 0) state.counts[pid] = n;
+    } catch (e) { /* 单平台失败不阻塞其它 */ }
+  });
+  await Promise.all(jobs);
+  renderPlats();
+}
+
+/* ---------- 房间(平台列表) ---------- */
+async function loadRooms(){
+  const pid = state.pid;
+  $("#roomCnt").textContent = "";
+  $("#roomNote").textContent = "加载中…";
+  $("#roomBody").innerHTML = `<tr><td colspan="5" class="empty">加载中…</td></tr>`;
+  // 同步活跃录制态(平台列表按钮 录制中 的依据)
+  try {
+    const [rr, wl] = await Promise.all([
+      api("/api/rec/status").then(x => x.json).catch(() => ({data: []})),
+      api("/api/watch/list").then(x => x.json).catch(() => ({data: []})),
+    ]);
+    state.activeRecs = {};
+    for (const x of (rr.data || [])){
+      if (["recording","starting","restarting","stopping"].includes(x.state)){
+        state.activeRecs[String(x.room_id)] = { rec_id: x.rec_id, state: x.state };
+      }
+    }
+    state.watchSet = {};
+    for (const w0 of (wl.data || [])) state.watchSet[String(w0.room_id)] = 1;
+  } catch (e) { /* 忽略: 后台不可用时不阻塞房间列表 */ }
+  let res;
+  try {
+    res = await api(`/api/rooms?pid=${pid}&type=0`);
+  } catch (e) {
+    $("#roomBody").innerHTML = `<tr><td colspan="5" class="empty">请求失败</td></tr>`;
+    $("#roomNote").textContent = ""; return;
+  }
+  const j = res.json || {};
+  const arr = j.data || [];
+  state.rooms = arr;
+  state.counts[pid] = arr.length;
+  renderPlats();
+  $("#roomCnt").textContent = arr.length ? `(${arr.length} 房)` : "";
+  $("#roomNote").textContent = j.ok ? "" : ("⚠ " + (j.msg || "列表失败"));
+  if (!arr.length){
+    $("#roomBody").innerHTML = `<tr><td colspan="5" class="empty">${j.ok ? "该平台暂无房间" : "加载失败"}</td></tr>`;
+    $("#roomSearch").value = "";
+    return;
+  }
+  renderRoomsBody();
+}
+
+function renderRoomsBody(){
+  const pid = state.pid;
+  const kw = ($("#roomSearch") ? $("#roomSearch").value : "").trim().toLowerCase();
+  const arr = state.rooms;
+  const list = kw
+    ? arr.filter(r => {
+        const rid = String(r.room_id || r.id || "");
+        const name = String(r.name || r.title || "");
+        return name.toLowerCase().includes(kw) || rid.includes(kw);
+      })
+    : arr;
+  if (!list.length){
+    $("#roomBody").innerHTML = `<tr><td colspan="5" class="empty">${kw ? "无匹配房间" : "加载中…"}</td></tr>`;
+    return;
+  }
+  $("#roomBody").innerHTML = "";
+  for (const r of list){
+    const rid = r.room_id || r.id || "";
+    const name = r.name || r.title || rid;
+    const online = String(r.online || "0");
+    const vc = r.view_count || "0";
+    const tr = document.createElement("tr");
+    const act = state.activeRecs[String(rid)] || null;
+    const watched = state.watchSet && state.watchSet[String(rid)];
+    tr.innerHTML = `
+      <td class="cell-name"><b>${esc(name)}</b> <span class="muted" style="color:var(--sub);font-size:12px">#${rid}</span></td>
+      <td><span class="tag ${online === "1" ? "online" : "off"}">${online === "1" ? "直播中" : "离线"}</span></td>
+      <td class="num">${vc}</td>
+      <td class="cell-ops"><button class="btn blue" data-act="cred">测试凭据</button></td>
+      <td>${act
+          ? `<span class="rec-badge">● 录制中</span>`
+          : (watched
+              ? `<button class="btn amber" data-act="watch">已监控</button>`
+              : `<button class="btn green" data-act="watch">开始监控</button>`)}</td>`;
+    tr.querySelector('[data-act="cred"]').onclick = () => openCredModal(pid, rid, name);
+    const watchBtn = tr.querySelector('[data-act="watch"]');
+    if (watchBtn) watchBtn.onclick = () => addWatchClick(pid, rid, name, watchBtn, watched);
+    $("#roomBody").appendChild(tr);
+  }
+}
+
+/* 凭据+直链合并弹窗: 测试凭据与复制直链一体, 纯查看不触发任何录制 */
+async function openCredModal(pid, rid, name){
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  const inner = `
+    <div class="modal-box" style="width:min(520px,94vw)">
+      <div class="modal-title">${esc(name || rid)} · 测试凭据</div>
+      <div class="modal-text" style="margin-bottom:8px">拉流地址 / 加密参数(只读查看, 不触发录制)</div>
+      <div id="credBody" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.7;word-break:break-all;max-height:46vh;overflow:auto">加载中…</div>
+      <div class="flex" style="margin-top:12px">
+        <button class="btn green" data-copy="1" style="margin-left:auto">复制直链</button>
+        <button class="btn" data-close="1">关闭</button>
+      </div>
+    </div>`;
+  mask.innerHTML = inner;
+  const closeFn = () => { document.removeEventListener("keydown", onKey); mask.remove(); };
+  mask.addEventListener("click", e => { if (e.target === mask) closeFn(); });
+  mask.querySelector('[data-close]').onclick = closeFn;
+  const onKey = e => { if (e.key === "Escape") closeFn(); };
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(mask);
+  const body = mask.querySelector("#credBody");
+  const cm = { direct: d => d.mode === "direct" || (!d.appid && d.play_url),
+               hls: d => String(d.play_url || "").includes(".m3u8"),
+               flv: d => String(d.play_url || "").includes(".flv"),
+               agora: d => !!d.appid };
+  try {
+    const { status, json } = await api(`/api/play?pid=${pid}&room_id=${encodeURIComponent(rid)}`);
+    const d = json || {};
+    if (status !== 200){ body.textContent = "后端返回 " + status; return; }
+    if (!d.ok){ body.textContent = "✗ " + (d.msg || "获取凭据失败"); return; }
+    const kind = cm.agora(d) ? "Agora 加密流" : (cm.direct(d) ? (cm.hls(d) ? "HLS 直链" : (cm.flv(d) ? "FLV 直链" : "直链")) : "未知");
+    let html = `<b>模式</b> ${esc(d.mode || "-")} · ${esc(kind)}<br>`;
+    if (d.name) html += `<b>名称</b> ${esc(d.name)}<br>`;
+    if (d.play_url){
+      html += `<b>拉流地址</b><br><span class="mono">${esc(d.play_url)}</span><br>`;
+    } else if (d.appid){
+      html += `<b>说明</b> Agora 加密流模式, 无外部直链<br>`;
+    }
+    if (d.appid) html += `<b>appid</b> <span class="mono">${esc(d.appid)}</span><br>`;
+    // channel/uid/token 仅 Agora 加密流才有意义, 直链模式这些字段是房间 ID 语义勿展示
+    if (d.appid){
+      if (d.channel) html += `<b>channel</b> <span class="mono">${esc(d.channel)}</span><br>`;
+      if (d.uid != null) html += `<b>uid</b> <span class="mono">${esc(String(d.uid))}</span><br>`;
+      if (d.token) html += `<b>token</b> <span class="mono">${esc(String(d.token).slice(0, 40))}…</span><br>`;
+    }
+    html += `<div style="margin-top:8px;padding:6px 10px;border-radius:6px;background:#fff7ed;color:#9a3412;font-size:12px">测试凭据仅供查看, 不会开始录制; 自动录制请用右侧「开始监控」</div>`;
+    body.innerHTML = html;
+    const copyBtn = mask.querySelector('[data-copy]');
+    copyBtn.onclick = async () => {
+      if (!d.play_url){
+        toast(d.appid ? "⚠ Agora 加密流模式,无外部直链" : "✗ 该平台未提供拉流地址", 3000);
+        return;
+      }
+      const proxied = `/api/stream?url=${encodeURIComponent(d.play_url)}`;
+      const full = location.origin + proxied;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText){
+          await navigator.clipboard.writeText(full);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = full; document.body.appendChild(ta); ta.select();
+          document.execCommand("copy"); ta.remove();
+        }
+        toast("已复制: " + full, 4000);
+      } catch (e) {
+        toast("失败: " + e.message);
+      }
+    };
+  } catch (e) {
+    body.textContent = "请求异常: " + e.message;
+  }
+}
+
+/* 平台 ID -> 中文名(监控/录制共用) */
+const PLATCN = {
+  449: "半糖", 383: "小妲己", 440: "番茄", 455: "杏仁", 472: "青瑶",
+  460: "草莓", 474: "密语", 473: "Hot51", 475: "Swag",
+};
+
+/* ---------- 录制(监控列表) ---------- */
+async function addWatchClick(pid, rid, name, btn, already){
+  btn.disabled = true;
+  try {
+    if (already){
+      // 已监控 → 点击 = 移出监控
+      const { status, json } = await api(`/api/watch/remove?room_id=${enc(rid)}`);
+      const d = json || {};
+      if (status !== 200 || !d.ok){
+        toast("✗ " + (d.msg || "移出监控失败")); btn.disabled = false; return;
+      }
+      toast("已移出监控", 2500);
+      if (state.watchSet) delete state.watchSet[String(rid)];
+      renderRoomsBody(); loadRecs(); return;
+    }
+    // 未监控 → 加入监控
+    btn.textContent = "请求中…";
+    const { status, json } = await api(`/api/watch/add?room_id=${enc(rid)}&pid=${pid}&name=${enc(name)}`);
+    const d = json || {};
+    if (status !== 200 || !d.ok){
+      toast("✗ " + (d.msg || "添加监控失败")); btn.disabled = false; btn.textContent = "开始监控"; return;
+    }
+    toast("✓ 已加入监控 " + (name || rid), 3000);
+    if (!state.watchSet) state.watchSet = {};
+    state.watchSet[String(rid)] = 1;
+    renderRoomsBody();
+    loadRecs();
+    // 立即触发一轮检查: 在线的房马上开录
+    try { await api("/api/watch/check"); loadRecs(); } catch (e) {}
+  } catch (e) {
+    toast("异常: " + e.message); btn.disabled = false; btn.textContent = already ? "已监控" : "开始监控";
+  }
+}
+async function loadRecs(){
+  try {
+    // 数据源 = 监控清单(平台列表「开始监控」提交); 合并同一房的录制实时状态
+    const [w, r] = await Promise.all([
+      api("/api/watch/list").then(x => x.json).catch(() => ({data: []})),
+      api("/api/rec/status").then(x => x.json).catch(() => ({data: []})),
+    ]);
+    const recsByRoom = {};
+    const recRows = r.data || [];
+    for (const r0 of recRows) recsByRoom[String(r0.room_id)] = r0;
+    const wRows = w.data || [];
+    const actives = recRows.filter(x => ["recording","starting","restarting","stopping"].includes(x.state));
+    const arr = wRows;
+    state.recs = arr;
+    $("#recCnt").textContent = arr.length ? `(${arr.length})` : "";
+    if (!arr.length){
+      $("#recBody").innerHTML = `<tr><td colspan="8" class="empty">无监控房间</td></tr>`;
+      return;
+    }
+    $("#recBody").innerHTML = "";
+    const REC_STATE_CN = {
+      starting: "启动中", recording: "录制中", restarting: "重连中",
+      stopping: "停止录制", done: "已完成", saved: "已保存",
+      interrupted: "已中断", failed: "失败", fail: "失败",
+    };
+    // 同步活跃录制状态到全局(平台列表按钮「录制中」用)
+    state.activeRecs = {};
+    for (const x of actives) state.activeRecs[String(x.room_id)] = { rec_id: x.rec_id, state: x.state };
+    for (const t of arr){
+      const wRow = t;
+      const rec = recsByRoom[String(t.room_id)] || {};
+      const name = wRow.name || rec.name || rec.room_id;
+      const platId = wRow.plat_id != null ? wRow.plat_id : rec.plat_id;
+      const rid = String(t.room_id);
+      // 清单房可能无录制任务(未开播/已停), 状态取录制实时状态, 否则「停止录制」
+      const wState = wRow.rec_state || null;
+      const st = ["recording","starting","restarting","stopping"].includes(rec.state) ? rec.state : (wState || "-");
+      const cn = st === "-" ? "未录制" : (REC_STATE_CN[st] || st);
+      const tag = st === "recording" ? "rec" : (st === "done" || st === "saved" ? "ok" : "off");
+      const platCn = PLATCN[String(platId)] || platId;
+      const engCn = (rec.engine || "").includes("ffmpeg") ? "直录" : ((rec.engine || "").includes("chromium") ? "浏览器" : "-");
+      // 名旁标 在线/离线(清单 online 字段)
+      const onState = wRow.online !== undefined
+          ? (wRow.online ? "在线" : "离线") : "-";
+      const size = rec.bytes || rec.seg_bytes || 0;
+      // 本次录制任务从开启到当前的时长
+      const durSec = rec.started_at ? Math.max(0, Date.now() / 1000 - rec.started_at) : 0;
+      const tr = document.createElement("tr");
+      // 开关 = 监控开关(关闭则不再自动开录)
+      const on = wRow.enabled !== false;
+      tr.innerHTML = `
+        <td><label class="switch"><input type="checkbox" data-act="enable" data-room="${esc(rid)}" ${on ? "checked" : ""}><span class="slider"></span></label></td>
+        <td class="cell-name"><b>${esc(name)}</b> <span class="muted" style="color:var(--sub);font-size:12px">#${rid}</span>
+            <span class="tag ${onState === "在线" ? "online" : "off"}">${onState}</span></td>
+        <td>${esc(platCn)}</td>
+        <td><span class="tag ${tag}">${esc(cn)}</span></td>
+        <td class="num">${fmtDurFull(durSec)}</td>
+        <td class="num">${fmtSize(size)}</td>
+        <td>${esc(engCn)}</td>
+        <td class="cell-ops">
+          <button class="btn red" data-act="del" data-room="${rid}">删除</button>
+        </td>`;
+      const en = tr.querySelector('[data-act="enable"]');
+      if (en) en.onchange = async () => {
+        await api(`/api/watch/enable?room_id=${enc(rid)}&enabled=${en.checked ? 1 : 0}`);
+        loadRecs();
+      };
+      const del = tr.querySelector('[data-act="del"]');
+      if (del) del.onclick = async () => {
+        const got = await confirmBox({ title: "移出监控", text: `将 ${name}（#${rid}）移出监控清单，不再自动录制。已录文件保留。`, ok: "移出", danger: true });
+        if (!got) return;
+        await api(`/api/watch/remove?room_id=${enc(rid)}`);
+        loadRecs();
+      };
+      $("#recBody").appendChild(tr);
+    }
+  } catch (e) {
+    $("#recCnt").textContent = "  ✗";
+  }
+}
+
+/* ---------- 文件(监控列表) ---------- */
+/* ========== 录制管理: hash 路由三级页面(每级独立视图, 点击跳转不平铺) ==========
+ * hash: #files                         平台列表级
+ *       #files/<plat>                  主播列表级
+ *       #files/<plat>/<folder>         文件列表级
+ * 支持浏览器前进/后退/刷新保持层级。
+ */
+function filesHash(){
+  return decodeURIComponent((location.hash || "#files").replace(/^#files/, "").replace(/^\//, ""));
+}
+function filesParts(){
+  const h = filesHash();
+  return h ? h.split("/") : [];
+}
+function filesGoRoute(route){
+  location.hash = "#files" + (route ? "/" + route : "");
+}
+function filesGoRoot(){
+  const el = $("#fileSearch"); if (el) el.value = "";
+  filesGoRoute("");
+}
+function filesGoPlat(plat){
+  const el = $("#fileSearch"); if (el) el.value = "";
+  filesGoRoute(encodeURIComponent(plat));
+}
+function filesGoFolder(plat, folder){
+  const el = $("#fileSearch"); if (el) el.value = "";
+  filesGoRoute(encodeURIComponent(plat) + "/" + encodeURIComponent(folder));
+}
+
+/* 删除文件(相对路径 rel, 与后端 _delete_file 一致) */
+async function delFile(rel, label){
+  const got = await confirmBox({ title: "删除文件", text: `确定删除文件：\n${label}\n删除后不可恢复。`, ok: "删除", danger: true });
+  if (!got) return;
+  try {
+    const { status, json } = await api(`/api/files/delete?name=${encodeURIComponent(rel)}`);
+    const d = json || {};
+    if (status !== 200 || !d.ok){ toast("✗ " + (d.msg || "删除失败")); return; }
+    toast("✓ 已删除 " + label, 3000);
+    await refreshFiles();
+    renderFilesView();
+  } catch (e) { toast("异常: " + e.message); }
+}
+/* 删除整个主播文件夹(录像全部删除); rel 为相对 REC_DIR 的目录路径 */
+async function delFolder(rel, label){
+  const got = await confirmBox({ title: "删除整个文件夹", text: `将删除主播「${label}」的全部录像文件，\n此操作不可恢复！确定继续？`, ok: "全部删除", danger: true });
+  if (!got) return;
+  try {
+    const { status, json } = await api(`/api/files/delete_folder?folder=${encodeURIComponent(rel)}`);
+    const d = json || {};
+    if (status !== 200 || !d.ok){ toast("✗ " + (d.msg || "删除文件夹失败")); return; }
+    toast("✓ 已删除文件夹 " + label, 3500);
+    await refreshFiles();
+    renderFilesView();
+  } catch (e) { toast("异常: " + e.message); }
+}
+
+function renderFilesCrumb(parts){
+  const el = document.getElementById("filesCrumb");
+  if (!el) return;
+  const sep = " <span style='color:var(--sub)'>/</span> ";
+  let html = `<a href="#files" style='color:var(--blue);text-decoration:none'>录制管理</a>`;
+  if (parts.length >= 1 && parts[0]){
+    html += sep + `<a href="#files/${encodeURIComponent(parts[0])}" style='color:var(--blue);text-decoration:none'>${esc(parts[0])}</a>`;
+  }
+  if (parts.length >= 2 && parts[1]){
+    html += sep + `<span style='color:var(--sub)'>${esc(parts[1])}</span>`;
+  }
+  html += sep + `<span style='color:var(--sub)'>共 ${state.files.length} 个文件</span>`;
+  el.innerHTML = html;
+}
+
+async function refreshFiles(){
+  try {
+    const { json } = await api("/api/files");
+    const arr = (json && json.data) || [];
+    state.files = arr;
+    const cnt = $("#fileCnt2");
+    if (cnt) cnt.textContent = arr.length ? `(${arr.length})` : "";
+    renderFilesView();
+  } catch (e) {
+    const box = $("#fileGroups");
+    if (box) box.innerHTML = `<div class="empty">加载失败</div>`;
+  }
+}
+
+function renderFilesView(){
+  const box = $("#fileGroups");
+  if (!box) return;
+  const parts = filesParts();
+  renderFilesCrumb(parts);
+  const plat = (parts[0] || "").trim();
+  const folder = (parts[1] || "").trim();
+  if (plat && folder) return renderFolderFilesView(plat, folder);
+  if (plat) return renderPlatRoomsView(plat);
+  return renderFilesRootView();
+}
+
+function platKeyOf(f){ return ((f.plat || "").trim()) || "未分类"; }
+
+/* 一级: 平台列表视图(一行一条) */
+function filesKw(){
+  const el = $("#fileSearch");
+  return el ? el.value.trim().toLowerCase() : "";
+}
+
+function renderFilesRootView(){
+  state.curPlat = null; state.curFolder = null;
+  const box = $("#fileGroups");
+  const kw = filesKw();
+  const arr = kw ? state.files.filter(f => platKeyOf(f).toLowerCase().includes(kw)) : state.files;
+  if (!arr.length){ box.innerHTML = `<div class="empty">${kw ? "无匹配平台" : "暂无成品"}</div>`; return; }
+  const gp = {};
+  for (const f of arr){ const k = platKeyOf(f); (gp[k] = gp[k] || []).push(f); }
+  const keys = Object.keys(gp).sort((a, b) => {
+    const ma = Math.max(...gp[a].map(x => x.mtime || 0));
+    const mb = Math.max(...gp[b].map(x => x.mtime || 0));
+    return mb - ma;
+  });
+  box.innerHTML = "";
+  const tb = document.createElement("table");
+  tb.innerHTML = `<thead><tr><th class="left">平台</th><th>主播数</th><th>文件数</th><th>大小</th><th>最近录制</th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+  for (const k of keys){
+    const fs = gp[k];
+    const anchors = new Set(fs.map(x => x.folder || "未分类"));
+    const total = fs.reduce((a, x) => a + (x.size || 0), 0);
+    const newest = Math.max(...fs.map(x => x.mtime || 0));
+    const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.innerHTML = `<td class="left"><b>${esc(k)}</b></td><td>${anchors.size}</td>
+      <td class="mono" style="color:var(--sub)">${fs.length}</td>
+      <td>${fmtSize(total)}</td><td>${fmtTime(newest)}</td>`;
+    tr.onclick = () => filesGoPlat(k);
+    tbody.appendChild(tr);
+  }
+  tb.appendChild(tbody);
+  box.appendChild(tb);
+}
+
+/* 二级: 主播列表视图 */
+function renderPlatRoomsView(plat){
+  state.curPlat = plat; state.curFolder = null;
+  const box = $("#fileGroups");
+  const kw = filesKw();
+  let fs = state.files.filter(f => platKeyOf(f) === plat);
+  if (kw) fs = fs.filter(f => (f.folder || "").toLowerCase().includes(kw) ||
+                                String(f.room_id || f.id || "").includes(kw));
+  if (!fs.length){ box.innerHTML = `<div class="empty">${kw ? "无匹配主播" : "该平台暂无文件"}</div>`; return; }
+  const gp = {};
+  for (const f of fs){ const k = f.folder || "未分类"; (gp[k] = gp[k] || []).push(f); }
+  const keys = Object.keys(gp).sort((a, b) => {
+    const ma = Math.max(...gp[a].map(x => x.mtime || 0));
+    const mb = Math.max(...gp[b].map(x => x.mtime || 0));
+    return mb - ma;
+  });
+  box.innerHTML = "";
+  const tb = document.createElement("table");
+  tb.innerHTML = `<thead><tr><th class="left">主播</th><th>文件数</th><th>大小</th><th>最近录制</th><th style="width:110px">操作</th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+  for (const k of keys){
+    const fs2 = gp[k];
+    const total = fs2.reduce((a, x) => a + (x.size || 0), 0);
+    const newest = Math.max(...fs2.map(x => x.mtime || 0));
+    const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.innerHTML = `<td class="left"><b>${esc(k)}</b></td><td class="mono" style="color:var(--sub)">${fs2.length}</td>
+      <td>${fmtSize(total)}</td><td>${fmtTime(newest)}</td>
+      <td><button class="btn red" data-delfolder="1">删除</button></td>`;
+    tr.onclick = () => filesGoFolder(plat, k);
+    const df = tr.querySelector("[data-delfolder]");
+    if (df) df.onclick = (ev) => { ev.stopPropagation(); delFolder(plat === "未分类" ? k : plat + "/" + k, k); };
+    tbody.appendChild(tr);
+  }
+  tb.appendChild(tbody);
+  box.appendChild(tb);
+}
+
+/* 三级: 文件列表视图 */
+function renderFolderFilesView(plat, folder){
+  state.curPlat = plat; state.curFolder = folder;
+  const box = $("#fileGroups");
+  const kw = filesKw();
+  let fs = state.files.filter(f => platKeyOf(f) === plat && (f.folder || "未分类") === folder);
+  if (kw) fs = fs.filter(f => (f.name || "").toLowerCase().includes(kw));
+  fs.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  if (!fs.length){ box.innerHTML = `<div class="empty">${kw ? "无匹配文件" : "该主播暂无文件"}</div>`; return; }
+  box.innerHTML = "";
+  const tb = document.createElement("table");
+  tb.innerHTML = `<thead><tr><th class="left">文件</th><th>大小</th><th>时长</th><th>时间</th><th>删除</th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+  for (const f of fs){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="wrap left"><b>${esc(f.name || "")}</b></td>
+      <td>${fmtSize(f.size)}</td>
+      <td>${fmtDur(f.duration)}</td>
+      <td>${fmtTime(f.mtime)}</td>
+      <td><button class="btn red" data-f="${esc(f.rel || f.name || "")}">删除</button></td>`;
+    tr.querySelector("[data-f]").onclick = (ev) => delFile(ev.target.dataset.f, folder + " / " + (f.name || ""));
+    tbody.appendChild(tr);
+  }
+  tb.appendChild(tbody);
+  box.appendChild(tb);
+}
+
+/* ---------- init ---------- */
+renderPlats();
+loadAllCounts();
+loadRooms();
+setInterval(() => {
+  if (document.getElementById("page-monitor").classList.contains("on")) loadRecs();
+}, 5000);
+setInterval(() => {
+  if (document.getElementById("page-files").classList.contains("on")) refreshFiles();
+}, 15000);
+setInterval(loadAllCounts, 60000);
+setInterval(() => {
+  if (document.getElementById("page-settings").classList.contains("on")) checkHealth();
+}, 10000);
+window.addEventListener("hashchange", () => {
+  if (document.getElementById("page-files").classList.contains("on")) renderFilesView();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<script src="/AgoraRTC_N-4.20.0.js"></script>
+<style>html,body{margin:0;background:#000}video{width:100%;height:auto;display:block}</style>
+</head><body>
+<video id="v" autoplay muted playsinline></video>
+<canvas id="cv" width="720" height="1280" style="display:none"></canvas>
+<script>
+// 录制页: 后端 playwright headless 加载
+// window.__REC__={appid,channel,token,uid,wsUrl,bitrate,audioBitrate,fps,mimeCands}
+window.__STATE__={state:'init'};
+const R = window.__REC__ || {};
+const V = document.getElementById('v');
+const CV = document.getElementById('cv');
+const CTX = CV.getContext('2d', {alpha:false});
+let client=null, drawTimer=null, rec=null, ws=null, vw=720, vh=1280;
+let audioCtx=null, audioDest=null, audioSrcNode=null;
+
+function st(s){ window.__STATE__.state=s; console.log('[REC] '+s); }
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+async function main(){
+  st('joining');
+  client = AgoraRTC.createClient({mode:'live', codec:'h264'});
+  client.on('user-published', async (user,mt)=>{
+    try{ await client.subscribe(user,mt); }catch(e){}
+    if(mt==='video'){
+      // 强订高码率主流(大流): 默认 SDK 在网络差时会自动切小流, 显式锁主流保画质
+      try{ client.setRemoteVideoStreamType(user.uid, 0); }catch(e){}  // 0=HIGH_STREAM
+      user.videoTrack.play('v');
+      const p = user.videoTrack.getMediaStreamTrack && user.videoTrack.getMediaStreamTrack();
+      if(p && p.getSettings){ const s=p.getSettings(); if(s.width){vw=s.width;vh=s.height;CV.width=vw;CV.height=vh;} }
+      st('video-ready');
+    }
+    if(mt==='audio'){
+      // 音轨采集 -> WebAudio 桥接输出到 MediaStream, 混入录制
+      try{
+        user.audioTrack.play();
+        const track = user.audioTrack.getMediaStreamTrack && user.audioTrack.getMediaStreamTrack();
+        if(track){
+          if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); audioDest = audioCtx.createMediaStreamDestination(); }
+          if(audioSrcNode){ try{audioSrcNode.disconnect();}catch(e){} }
+          audioSrcNode = audioCtx.createMediaStreamSource(new MediaStream([track]));
+          audioSrcNode.connect(audioDest);
+        }
+        window.__STATE__.audio=true;
+      }catch(e){ console.log('[REC] audio bridge err '+e); }
+    }
+  });
+  try{
+    await client.join(R.appid, R.channel, R.token, R.uid||0);
+    st('joined');
+    const t0=Date.now();
+    while(window.__STATE__.state!=='video-ready' && window.__STATE__.state!=='joined-audioonly' && Date.now()-t0<15000){ await sleep(200); }
+    startRecord();
+  }catch(e){ st('join-fail:'+e); }
+}
+
+function startRecord(){
+  function draw(){
+    try{
+      if(V.videoWidth){
+        if(vw!==V.videoWidth || vh!==V.videoHeight){ vw=V.videoWidth; vh=V.videoHeight; CV.width=vw; CV.height=vh; window.__STATE__.resChanged=(window.__STATE__.resChanged||0)+1; }
+        CTX.drawImage(V,0,0,vw,vh);
+      }
+    }catch(e){}
+    drawTimer=requestAnimationFrame(draw);
+  }
+  draw();
+  const vidStream = CV.captureStream(R.fps||20);
+  // 合并音轨
+  let finalStream = vidStream;
+  try{
+    if(audioDest && audioDest.stream.getAudioTracks().length){
+      finalStream = new MediaStream([...vidStream.getVideoTracks(), ...audioDest.stream.getAudioTracks()]);
+    }
+  }catch(e){ console.log('[REC] merge audio err '+e); }
+
+  const mimeCands = R.mimeCands && R.mimeCands.length ? R.mimeCands : ['video/webm;codecs=h264,opus','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+  const mime = mimeCands.find(m=>MediaRecorder.isTypeSupported(m))||'video/webm';
+  // audioBitsPerSecond 提到 128k(原64k), 音质更饱满; video cap 用 R.bitrate
+  rec = new MediaRecorder(finalStream, {mimeType:mime, videoBitsPerSecond: R.bitrate||2500000, audioBitsPerSecond: R.audioBitrate||128000});
+  st('recording');
+  window.__STATE__.recording=true; window.__STATE__.mime=mime; window.__STATE__.hasAudio=(finalStream.getAudioTracks().length>0);
+
+  ws = new WebSocket(R.wsUrl);
+  ws.binaryType='arraybuffer';
+  ws.onopen=()=>{
+    console.log('[REC] ws open');
+    // 先告知后端真实 mime, 让其决定 ffmpeg copy/x264 参数
+    try{ ws.send(JSON.stringify({__mime__:mime})); }catch(e){}
+    try{ rec.start(1000); }catch(e){ st('rec-start-err:'+e); }
+  };
+  ws.onerror=()=>console.log('[REC] ws err');
+  ws.onclose=()=>{ window.__STATE__.wsClosed=true; };
+  rec.ondataavailable = async (e)=>{
+    if(e.data && e.data.size>0 && ws && ws.readyState===1){
+      const buf = await e.data.arrayBuffer();
+      ws.send(buf);
+      window.__STATE__.bytes = (window.__STATE__.bytes||0)+buf.byteLength;
+    }
+  };
+}
+
+window.__STOP__ = async function(){
+  return new Promise(res=>{
+    try{ if(drawTimer) cancelAnimationFrame(drawTimer); }catch(e){}
+    if(rec && rec.state!=='inactive'){
+      rec.onstop=()=>{ try{ws&&ws.send(JSON.stringify({__end__:true}));}catch(e){} try{ws&&ws.close();}catch(e){} st('stopped'); res(true); };
+      rec.stop();
+    } else { try{ws&&ws.close();}catch(e){} st('stopped'); res(true); }
+  });
+};
+
+main();
+</script></body></html>

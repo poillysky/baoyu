@@ -1,0 +1,21 @@
+
+<!DOCTYPE html><html><head>
+<script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script>
+</head><body><video id="v" autoplay muted playsinline></video>
+<script>
+window.__R={state:'init',video:0,audio:0,res:''};
+(async()=>{
+  const P=new URLSearchParams(location.search);
+  const appid=P.get('appid'),ch=P.get('ch'),tok=P.get('tok'),uid=P.get('uid');
+  const client=AgoraRTC.createClient({mode:'live',codec:'vp8'});
+  client.on('user-published',async(u,mt)=>{
+    try{await client.subscribe(u,mt);}catch(e){}
+    if(mt==='video'){window.__R.video=1;window.__R.res=u.videoTrack.getMediaStreamTrack?('v'):'';u.videoTrack.play('v');}
+    if(mt==='audio'){window.__R.audio=1;u.audioTrack.play();}
+    window.__R.state='published-'+mt;
+  });
+  client.on('user-unpublished',(u,mt)=>{window.__R.state='unpub-'+mt;});
+  try{await client.join(appid,ch,tok,uid===null?null:parseInt(uid));window.__R.state='joined';}
+  catch(e){window.__R.state='join-fail:'+e;}
+})();
+</script></body></html>

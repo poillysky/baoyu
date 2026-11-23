@@ -1,0 +1,14 @@
+{
+  "proxy_enabled": false,
+  "proxy_url": "http://127.0.0.1:7897",
+  "single_browser": true,
+  "max_concurrent": 12,
+  "transcode_fast": true,
+  "video_bitrate": 10000000,
+  "capture_fps": 30,
+  "quality": "max",
+  "agora_enabled": true,
+  "agora_host": "192.168.2.38",
+  "agora_port": 8080,
+  "agora_out_dir": "/vol1/1000/Docker/agora-recorder/recordings"
+}

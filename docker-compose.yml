@@ -1,0 +1,39 @@
+version: "3.8"
+services:
+  baoyu-rec:
+    build: .
+    image: baoyu-rec:latest
+    container_name: baoyu-rec
+    restart: unless-stopped
+    ports:
+      - "8900:8900"   # Web 管理端
+      - "8902:8902"   # 前端实时推送 WS
+      - "8903:8903"   # 录制分片接收 WS
+    volumes:
+      # 1) agora 原生录制输出目录 —— 与 agora-recorder 容器共享同一宿主机目录(同 NAS 部署时零拷贝直读, 不走 SSH)
+      #    同机部署请把 AGORA_REC_HOST 指向 agora 容器的平铺输出目录, 例如:
+      #    AGORA_REC_HOST=/vol1/1000/Docker/agora-recorder/recordings
+      - ${AGORA_REC_HOST:-./agora recordings}:/app/agora_recordings
+      # 2) 本项目录制暂存(web/direct 录制落地 + 原生文件转移暂存) —— 固态盘, 持续录制
+      - ${BAOYU_REC_HOST:-./baoyu recordings}:/app/baoyu_recordings
+      # 3) 最终完整文件归档 —— 机械硬盘, 录完整一次性写入
+      - ${FINAL_REC_HOST:-./recordings}:/app/final_recordings
+      - ./backend/kiwi_identity.json:/app/backend/kiwi_identity.json:ro
+      - ./backend/account_state.json:/app/backend/account_state.json:ro
+      - ./backend/watchlist.json:/app/backend/watchlist.json
+    environment:
+      - TZ=Asia/Shanghai
+      # 三目录绝对路径(容器内), 与上面 volumes 挂载点一致
+      - AGORA_REC_DIR=/app/agora_recordings
+      - BAOYU_REC_DIR=/app/baoyu_recordings
+      - FINAL_REC_DIR=/app/final_recordings
+      - SINGLE_BROWSER=1
+      - MAX_CONCURRENT=12
+      - CAPTURE_FPS=20
+      - VIDEO_BITRATE=2500000
+      - TRANSCODE_FAST=1
+    # 单 Chromium 多 tab 需要足够的共享内存; 加 shm 避免崩溃
+    shm_size: "1gb"
+    # 录制解码/编码吃 CPU, 按需限核
+    # cpus: "4"
+    # mem_limit: 4g

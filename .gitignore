@@ -1,0 +1,43 @@
+# 录制成品 (大文件)
+recordings/**/*.mp4
+recordings/**/*.webm
+recordings/**/*.ts
+agora\ recordings/
+baoyu\ recordings/
+recordings/
+agora_recordings/
+final_recordings/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.venv-*/
+backend/.venv*/
+
+# 运行态 / 缓存 / 崩溃转储
+*.log
+*.dmp
+*.db
+*.db-wal
+*.db-shm
+backend/img_cache/
+backend/status.db*
+watchlist.json.bak
+/tmp/
+.thumbs/
+
+# 前端 next 工程(体积大, 不进镜像不进仓库)
+frontend-next/node_modules/
+frontend-next/.next/
+frontend-next/node_modules
+node_modules/
+
+# 密钥/账号态(敏感, 按需单独挂载)
+backend/kiwi_identity.json
+backend/account_state.json
+
+# macOS
+.DS_Store
