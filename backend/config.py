@@ -22,14 +22,26 @@ ADB = os.environ.get("ADB", "/Users/poilly/Library/Android/sdk/platform-tools/ad
 PKG = "me.hq80tw8.ws04i1m"
 FLUTTER_PREFS = "/data/data/%s/shared_prefs/FlutterSharedPreferences.xml" % PKG
 
-# 优先环境变量 CHROMIUM; 未指定则跨平台自动探测:
-#  - Linux(Docker): $PLAYWRIGHT_BROWSERS_PATH(默认 /ms-playwright) 下 chromium-*/chrome-linux*/chrome
-#  - macOS: ~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/.../Chrome(或 Google Chrome for Testing)
+# 优先环境变量 CHROMIUM; 未指定则跨平台自动探测(完整 Chrome 优先, 含 H.264 专利解码,
+# 开源 Chromium 无 H.264 会导致 Agora h264 流在容器内无法解码 → canvas 空 → 0 分片):
+#  - Linux(Docker): $PLAYWRIGHT_BROWSERS_PATH(默认 /ms-playwright) 下:
+#       chrome-linux*/chrome (完整 Chrome, 优先)  →  chromium-*/chrome-linux*/chrome (开源, 无H264)
+#  - macOS: ~/Library/Caches/ms-playwright 下 chrome-mac* 优先, 其次 chromium-*
 CHROMIUM = os.environ.get("CHROMIUM", "")
 if not CHROMIUM:
     import glob as _glob
+    import shutil as _sh
+    # 0) 系统完整 Chrome(含 H.264 专利解码; Debian/Ubuntu 上 playwright install chrome 装的)
+    for _c in ("google-chrome-stable", "google-chrome", "chromium-browser", "chromium"):
+        _p = _sh.which(_c)
+        if _p:
+            CHROMIUM = _p
+            break
+if not CHROMIUM:
+    import glob as _glob
     _BP = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
-    _cands = sorted(_glob.glob(os.path.join(_BP, "chromium-*/chrome-linux*/chrome")))
+    _cands = sorted(_glob.glob(os.path.join(_BP, "chrome-linux*/chrome")))          # 完整 Chrome(含H264)
+    _cands += sorted(_glob.glob(os.path.join(_BP, "chromium-*/chrome-linux*/chrome")))  # 开源 Chromium
     _cands += sorted(_glob.glob(os.path.expanduser(
         "~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/**/Google Chrome for Testing"),
         recursive=True))

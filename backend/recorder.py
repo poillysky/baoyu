@@ -87,9 +87,9 @@ _CHROMIUM_ARGS = [
     "--metrics-recording-only",
     "--mute-audio",
     "--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints",
-    # 单浏览器多渲染进程上限放宽, 但每渲染进程堆限 256M 防爆
+    # 单浏览器多渲染进程上限放宽; 堆限只留保护不设死(并发多房 V8 堆到 256M 会整页崩)
     "--renderer-process-limit=24",
-    "--js-flags=--max-old-space-size=256",
+    "--js-flags=--max-old-space-size=1024",
     "--disk-cache-size=33554432",
 ]
 
@@ -320,12 +320,28 @@ async def _ws_handler(ws):
         return
     task["state"] = "recording"
     task["last_data"] = time.time()
+    # ---- 单连接保护(ws 世代号): 同 task 只允许一个活 ws。
+    # 看门狗重启时旧 ctx 可能没关干净, 旧页面 ws 还活着; 此时新页面又连上,
+    # 会造成两个页面实例双写同一 task(日志: 同 rec_id 两次 ws closed 同字节)。
+    # 新连接+1 世代并接管; 旧连接收到数据/断连回调时因世代号不匹配全部作废。----
+    gen = task.get("_ws_gen", 0) + 1
+    task["_ws_gen"] = gen
+    old_ws = task.get("_ws")
+    if old_ws is not None and old_ws is not ws:
+        try:
+            await old_ws.close()   # 顶掉旧连接(其 finally 因世代不匹配不会触发断连)
+        except Exception:
+            pass
+    task["_ws"] = ws
     # 前端在 ws.onopen 后开始录, 会先把真实 mime 通过文本消息告知; 这里先读第一条若为 mime 声明
     task["ws_ready"] = True
     log("ws connected rec", rec_id)
     _notify_stats()
     try:
         async for msg in ws:
+            if task.get("_ws") is not ws or task.get("_ws_gen") != gen:
+                log("ws superseded rec", rec_id, "gen", gen, "-> 丢弃残留数据")
+                break
             if isinstance(msg, (bytes, bytearray)):
                 if task.get("ff") or task.get("fh"):
                     await _ff_write(task, bytes(msg))     # 背压写入，防止内存涨爆
@@ -337,6 +353,9 @@ async def _ws_handler(ws):
             else:
                 try:
                     j = json.loads(msg)
+                    if j.get("__diag__"):
+                        log("PAGE-DIAG rec", rec_id, json.dumps(j, ensure_ascii=False)[:300])
+                        continue
                     if j.get("__end__"):
                         break
                     if j.get("__mime__"):
@@ -347,7 +366,7 @@ async def _ws_handler(ws):
                         # 首帧到达前重建 ffmpeg, 对齐输入格式/copy 策略(此时还没数据写入)
                         if not task.get("_ff_aligned"):
                             task["_ff_aligned"] = True
-                            if task.get("bytes", 0) == 0:
+                            if task.get("seg_bytes", 0) == 0:
                                 mp4 = task.get("ff_mp4") or task.get("mp4_path")
                                 await _start_ff(task, mp4)   # 用 rec_mime 重新决定参数
                             else:
@@ -360,35 +379,49 @@ async def _ws_handler(ws):
         try: await ws.close()
         except Exception: pass
         log("ws closed rec", rec_id, "bytes", task.get("bytes"))
-        # 断连处理: 用户主动 stop -> 已 finalized, 不动;
-        # 否则(直播断流/页面崩溃/浏览器崩) -> 先保存当前段 mp4, 再看门狗重启继续监守。
-        if not task.get("finalized") and not task.get("restarting"):
-            task["_disc_task"] = asyncio.create_task(_on_disconnect(task))
+        # 只有"当前世代"的 ws 关闭才算真正断连; 被顶替的旧连接回掉在此作废,
+        # 避免双 _on_disconnect -> 双 watchdog -> retry 双加 -> 秒断秒重启死循环。
+        if task.get("_ws") is ws and task.get("_ws_gen") == gen:
+            task["_ws"] = None
+            # 断连处理: 用户主动 stop -> 已 finalized, 不动;
+            # 否则(直播断流/页面崩溃/浏览器崩) -> 先保存当前段 mp4, 再看门狗重启继续监守。
+            if not task.get("finalized") and not task.get("restarting"):
+                task["_disc_task"] = asyncio.create_task(_on_disconnect(task))
 
 
 async def _on_disconnect(task):
-    """断连收尾: 当前段落存 mp4 (保命), 然后看门狗重启(若未主动停且重试未耗尽)。"""
+    """断连收尾: 当前段落存 mp4 (保命), 然后看门狗重启(若未主动停且重试未耗尽)。
+    单飞: 同一 task 只允许一个断连收尾在执行, 防双 ws 竞态触发双 watchdog。"""
     rec_id = task.get("rec_id")
     if task.get("finalized") or task.get("restarting"):
         return
-    task["restarting"] = True   # 防重入
-    user_stop = bool(task.get("user_stopped"))
-    await _save_current_segment(task, reason="disconnect")   # 断连保文件
-    if user_stop:
-        task["state"] = "done"; task["restarting"] = False
-        task["finished_at"] = time.time()
-        await _close_ctx(task)   # 下播/主动停: 释放 tab
-        _notify_stats(); return
-    if task.get("retry", 0) < C.WATCHDOG_MAX_RETRY:
-        log("断连保文件完成, 看门狗重启继续监守 rec", rec_id)
-        task["restarting"] = False
-        asyncio.create_task(_watchdog(task))
-    else:
-        log("断连且达最大重试, 停止监守 rec", rec_id)
-        task["state"] = "interrupted"; task["restarting"] = False
-        task["finished_at"] = time.time()
-        await _close_ctx(task)   # 重试耗尽: 释放 tab
-        _notify_stats()
+    if task.get("_disc_running"):
+        log("断连收尾已在执行, 跳过重复触发 rec", rec_id)
+        return
+    task["_disc_running"] = True
+    try:
+        if task.get("finalized") or task.get("restarting"):
+            return
+        task["restarting"] = True   # 防重入
+        user_stop = bool(task.get("user_stopped"))
+        await _save_current_segment(task, reason="disconnect")   # 断连保文件
+        if user_stop:
+            task["state"] = "done"; task["restarting"] = False
+            task["finished_at"] = time.time()
+            await _close_ctx(task)   # 下播/主动停: 释放 tab
+            _notify_stats(); return
+        if task.get("retry", 0) < C.WATCHDOG_MAX_RETRY:
+            log("断连保文件完成, 看门狗重启继续监守 rec", rec_id)
+            task["restarting"] = False
+            asyncio.create_task(_watchdog(task))
+        else:
+            log("断连且达最大重试, 停止监守 rec", rec_id)
+            task["state"] = "interrupted"; task["restarting"] = False
+            task["finished_at"] = time.time()
+            await _close_ctx(task)   # 重试耗尽: 释放 tab
+            _notify_stats()
+    finally:
+        task["_disc_running"] = False
 
 
 async def _close_ctx(task):
@@ -439,8 +472,10 @@ async def _idle_browser_reaper():
             if _BROWSER is None:
                 continue
             with _TASKS_LOCK:
-                active = any(t.get("state") in ("starting", "recording", "restarting", "stopping", "saved")
-                             and not t.get("finalized") for t in _TASKS.values())
+                # video-ready 也是录制中(recorder.html tryStartRecord 前), 必须算活跃
+                active = any(not t.get("finalized")
+                             and t.get("state") not in (None, "idle", "done", "fail", "interrupted", "failed")
+                             for t in _TASKS.values())
             idle_sec = float(os.environ.get("IDLE_BROWSER_SEC", "60"))
             if not active and time.time() - _LAST_ACTIVE > idle_sec:
                 log("浏览器空闲超过 %.0fs, 关闭全局 Chromium 释放资源" % idle_sec)

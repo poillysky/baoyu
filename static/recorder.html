@@ -106,26 +106,18 @@ function setMaster(uid){
   if(t) activateAudio(masterUid, t);
 }
 
-/* ---------- 画布采集: 主全屏 + 嘉宾画中画 ---------- */
+/* ---------- 画布采集: 只画主主播(不要画中画) ---------- */
 function draw(){
   try{
+    // 状态同步(供外部探针/调试用)
+    window.__STATE__.masterUid = masterUid;
+    window.__STATE__.videoCount = Object.keys(vids).length;
+    window.__STATE__.peers = Object.keys(vids).filter(k=>hasData(vids[k])).length;
     const mv = master();
     if(mv){
       const w=mv.video.videoWidth, h=mv.video.videoHeight;
       if(w!==vw || h!==vh){ vw=w; vh=h; CV.width=vw; CV.height=vh; window.__STATE__.resChanged=(window.__STATE__.resChanged||0)+1; }
       CTX.drawImage(mv.video, 0, 0, vw, vh);
-      // 画中画: 除主外的有数据嘉宾
-      let i=0;
-      for(const k in vids){
-        if(k===String(masterUid) && masterUid!==null) continue;
-        const vd=vids[k];
-        if(!hasData(vd)) continue;
-        i++; if(i>3) break;
-        const pw=Math.round(vw*0.32);
-        const ph=Math.round(pw*vd.video.videoHeight/vd.video.videoWidth);
-        const px=vw-pw-16, py=vh-ph-16-i*(ph+12);
-        try{ CTX.drawImage(vd.video, px, py, pw, ph); }catch(e){}
-      }
     } else {
       CTX.fillStyle='#000'; CTX.fillRect(0,0,vw,vh);
     }
@@ -133,20 +125,58 @@ function draw(){
   drawTimer=requestAnimationFrame(draw);
 }
 
+
+function diag(obj){
+  try{
+    obj.__diag__ = true;
+    obj.ts = new Date().toISOString().slice(11,19);
+    window.__STATE__.lastDiag = JSON.stringify(obj).slice(0,400);
+    if(ws && ws.readyState===1){ ws.send(JSON.stringify(obj)); }
+  }catch(e){}
+}
+window.addEventListener('beforeunload', ()=>{ try{ diag({ev:'unload', st:JSON.stringify(window.__STATE__).slice(0,300)}); }catch(_){} });
+window.addEventListener('pagehide', ()=>{ try{ diag({ev:'pagehide', vis:document.visibilityState, st:JSON.stringify(window.__STATE__).slice(0,300)}); }catch(_){} });
+document.addEventListener('visibilitychange', ()=>{ try{ diag({ev:'vis', vis:document.visibilityState}); }catch(_){} });
+
 /* ---------- 主流程 ---------- */
 async function main(){
   st('joining');
   client = AgoraRTC.createClient({mode:'live', codec:'h264'});
 
-  client.on('user-published', async (user, mt)=>{
+  client.on('connection-state-change', (cur, rev)=>{
+    try{
+      const st = window.__STATE__;
+      st.connState = cur;
+      st.connPrev = rev;
+      st.connChanges = (st.connChanges||0)+1;
+      window.__STATE__.lastDiag = 'conn '+rev+'->'+cur;
+      diag({ev:'conn', from:rev, to:cur});
+    }catch(e){}
+  });
+  window.__STATE__.connState = 'init';
+  window.addEventListener('error', (e)=>{
+    try{
+      const d = {ev:'pageerror', msg:(e.message||'').slice(0,200), file:(e.filename||'').slice(-60), line:e.lineno};
+      window.__STATE__.pageErrors=(window.__STATE__.pageErrors||0)+1;
+      diag(d);
+    }catch(_){}
+  });
+  window.addEventListener('unhandledrejection', (e)=>{
+    try{
+      diag({ev:'rejection', msg:String(e.reason&&e.reason.message||e.reason||'').slice(0,200)});
+      window.__STATE__.unhandled=(window.__STATE__.unhandled||0)+1;
+    }catch(_){}
+  });
+client.on('user-published', async (user, mt)=>{
     try{ await client.subscribe(user, mt); }catch(e){}
     if(mt==='video'){
       try{ client.setRemoteVideoStreamType(user.uid, 0); }catch(e){}
       setupVideo(user.uid, user.videoTrack);
-      st('video-ready');
-      tryStartRecord();
       // 主主播: 第一个视频源就是主, 此后绝不换人
       if(masterUid===null){ setMaster(user.uid); }
+      // 只在还没开录时置 video-ready 并尝试开录; 已在 recording 不得重置状态
+      // (否则后端轮询等不到 recording 会 25s 超时误杀页面 -> 无限重启)
+      if(!recStarted){ st('video-ready'); tryStartRecord(); }
     }
     if(mt==='audio'){
       const mt2 = user.audioTrack && user.audioTrack.getMediaStreamTrack && user.audioTrack.getMediaStreamTrack();
@@ -211,7 +241,7 @@ function startRecord(){
     try{ rec.start(1000); }catch(e){ st('rec-start-err:'+e); }
   };
   ws.onerror=()=>console.log('[REC] ws err');
-  ws.onclose=()=>{ window.__STATE__.wsClosed=true; };
+  ws.onclose=()=>{ window.__STATE__.wsClosed=true; try{ diag({ev:'wsclose'}); }catch(_){} };
   rec.ondataavailable = async (e)=>{
     if(e.data && e.data.size>0 && ws && ws.readyState===1){
       try{
@@ -222,6 +252,26 @@ function startRecord(){
     }
   };
 }
+
+// 页面级看门狗: 每秒检查一次 MediaRecorder/ws 存活, 抛异常进 diag(不中断录制)
+setInterval(()=>{
+  try{
+    if(rec && document.visibilityState==='visible'){
+      if(rec.state!=='recording' && rec.state!=='inactive'){
+        diag({ev:'recstate', cur:rec.state, mime:window.__STATE__.mime, hasAudio:window.__STATE__.hasAudio, bytes:window.__STATE__.bytes||0});
+      }
+      if(!ws || ws.readyState!==1){
+        diag({ev:'wsdead', ready:ws?ws.readyState:-1});
+      }
+      if(masterUid!==null && !vids[masterUid] && Date.now()-(window.__STATE__.lastMasterSeen||0)>10000){
+        diag({ev:'nomaster', masterUid:masterUid, vids:Object.keys(vids).length});
+      }
+      if(vids[masterUid] && vids[masterUid].video && vids[masterUid].video.videoWidth>0){
+        window.__STATE__.lastMasterSeen=Date.now();
+      }
+    }
+  }catch(_){}
+},1000);
 
 window.__STOP__ = async function(){
   return new Promise(res=>{
