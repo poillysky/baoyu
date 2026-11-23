@@ -10,7 +10,7 @@
 - 断连即收尾: 立即把已录 webm 转 mp4, 避免文件丢失
 - 状态变化经 hub 实时推前端
 """
-import asyncio, os, time, json, threading, sys, uuid, glob
+import asyncio, os, time, json, threading, sys, uuid, glob, shutil
 import config as C
 
 HERE = C.HERE
@@ -664,6 +664,40 @@ async def _watchdog(task):
             task["restarting"] = False
 
 
+def _archive_final(task):
+    """web 录制完成后: 把成品段**移动**进 FINAL_REC_DIR 最终归档(机械盘)。
+
+    目录结构对齐项目规范: {FINAL_REC_DIR}/{plat_dir}/{folder}/{原名}。
+    移动即删除暂存原件, 文件只保留最终一份。失败只记日志不阻断。
+    """
+    segs = task.get("segments") or []
+    if not segs:
+        return
+    plat_dir = task.get("plat_dir") or "plat%s" % task.get("plat_id", "0")
+    folder = task.get("folder") or str(task.get("room_id", "room"))
+    fdir = os.path.join(C.FINAL_REC_DIR, plat_dir, folder)
+    try:
+        os.makedirs(fdir, exist_ok=True)
+    except Exception as e:
+        log("归档目录创建失败", fdir, repr(e)); return
+    for mp4 in segs:
+        if not mp4 or not os.path.exists(mp4) or os.path.getsize(mp4) <= 0:
+            continue
+        try:
+            dst = os.path.join(fdir, os.path.basename(mp4))
+            if os.path.exists(dst):
+                os.remove(dst)
+            shutil.move(mp4, dst)
+            # 移动成功后把成品指针更新到新位置, 状态接口返回有效路径
+            if task.get("final_mp4") == mp4:
+                task["final_mp4"] = dst
+            if task.get("mp4_path") == mp4:
+                task["mp4_path"] = dst
+            log("已移动归档最终目录(删除暂存)", dst)
+        except Exception as e:
+            log("归档移动失败(保留暂存)", mp4, repr(e))
+
+
 async def _finalize(task, reason="stop"):
     if task.get("finalized"):
         return {"ok": True, "rec_id": task.get("rec_id"), "mp4": task.get("final_mp4"),
@@ -690,6 +724,12 @@ async def _finalize(task, reason="stop"):
     task["finished_at"] = time.time()
     task["final_mp4"] = mp4 if mp4_ok else (all_segs[-1] if all_segs else None)
     task["segments"] = all_segs
+    # 录制收尾后把成品归档到最终目录(机械盘), 失败不阻断
+    if task["state"] == "done":
+        try:
+            _archive_final(task)
+        except Exception as e:
+            log("归档异常", repr(e))
     log("finalize rec", task.get("rec_id"), "reason", reason, "mp4_ok", mp4_ok,
         "segments", len(task["segments"]))
     _notify_stats()

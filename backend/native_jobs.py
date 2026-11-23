@@ -116,9 +116,12 @@ def _place(src_local, plat_name, anchor, name_tag):
         fdir = os.path.join(C.FINAL_REC_DIR, _sanitize(plat_name), anchor)
         os.makedirs(fdir, exist_ok=True)
         final = os.path.join(fdir, fname)
-        shutil.copy2(mid, final)
+        if os.path.exists(final):
+            os.remove(final)
+        shutil.move(mid, final)
     except Exception as e:
-        print("[NATIVE] 归档失败(保留暂存):", e)
+        print("[NATIVE] 归档移动失败(保留暂存):", e)
+        final = mid if (final is None) else final
     return mid, final
 
 
@@ -176,8 +179,11 @@ def _run(rec_id, room_id, plat_id, name, cred, duration):
         name_tag = _sanitize(name or cred.get("name") or ("ROOM_%s" % room_id))
         anchor = "%s_%s" % (name_tag, room_id)
         mid, final = _place(tmp, _plat_name(plat_id), anchor, name_tag)
-        task.update(state="done", mp4=final or mid, mid_path=mid, final_path=final,
-                    folder=os.path.basename(os.path.dirname(mid)), bytes=os.path.getsize(mid))
+        # _place 已把成品 move 进最终目录, 原件(mid)可能不存在, 用现存文件取大小
+        done_path = final if (final and os.path.exists(final)) else mid
+        task.update(state="done", mp4=done_path, mid_path=mid, final_path=final,
+                    folder=os.path.basename(os.path.dirname(done_path)),
+                    bytes=os.path.getsize(done_path))
     except Exception as e:
         task.update(state="fail", fallback_web=True, msg="原生异常:%r" % (e,))
 
