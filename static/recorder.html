@@ -9,9 +9,10 @@ canvas{width:0;height:0}
 <canvas id="cv" width="720" height="1280"></canvas>
 <script>
 // 录制页 v2(连麦/多主播):
-//   - 多主播同时显示: 主主播全屏 + 嘉宾画中画(右下角, 最多3个)
-//   - 音频只混主主播(实际在录的): 嘉宾/连麦声音不录
-//   - 主主播下播自动把嘉宾升为主; 页面异常绝不抛到外层
+//   - 主主播固定: 第一个视频源即主, 下播/连麦都不换人, 主画面一直是录的主播
+//   - 嘉宾画中画: 右下角最多3个连线嘉宾同时显示
+//   - 音频只混主主播(实际在录的), 嘉宾声音不录
+//   - 连麦进入/退出/主播断流重连: 重发布即换轨恢复, MediaRecorder 全程不中断
 // window.__REC__={appid,channel,token,uid,wsUrl,bitrate,audioBitrate,fps,mimeCands}
 window.__STATE__={state:'init'};
 const R = window.__REC__ || {};
@@ -55,14 +56,8 @@ function hasData(vd){
 }
 
 function master(){
+  // 主主播固定不变(不因断流/连麦换人): 只认 masterUid
   if(masterUid!==null && vids[masterUid] && hasData(vids[masterUid])) return vids[masterUid];
-  // 主无效 -> 提升第一个有数据的, 声音也切到新主
-  for(const k in vids){
-    if(hasData(vids[k])){
-      switchMaster(k);
-      return vids[k];
-    }
-  }
   return null;
 }
 
@@ -70,14 +65,10 @@ function cleanupUid(uid, mt){
   const k=uidKey(uid);
   if(mt==='audio' || !mt){
     delete audioTracks[k];
+    // 主主播音轨断了 -> 静音(不切嘉宾声音); 主主播重新发布时恢复
     if(audActive===k){
       if(audioSrcs[k]){ try{ audioSrcs[k].disconnect(); }catch(e){} delete audioSrcs[k]; }
       audActive=null;
-      // 主主播没声了 -> 补上当前主画面的声音
-      if(masterUid!==null && masterUid!==k){
-        const t=audioTracks[masterUid];
-        if(t){ activateAudio(masterUid, t); }
-      }
     }
   }
   if(mt==='video' || !mt){
@@ -85,12 +76,12 @@ function cleanupUid(uid, mt){
       try{ vids[k].video.srcObject=null; }catch(e){}
       try{ vids[k].video.remove(); }catch(e){}
       delete vids[k];
-      if(masterUid===k){ masterUid=null; }
+      // 主主播画面消失: 保持主身份不变(不换人), 录制画面黑屏等主播回来
     }
   }
 }
 
-/* ---------- 音频轨管理: 只混当前主主播的声音 ---------- */
+/* ---------- 音频轨管理: 只混主主播声音, 主主播静音/断开也不切嘉宾 ---------- */
 function activateAudio(uid, track){
   const k=uidKey(uid);
   try{
@@ -107,13 +98,12 @@ function activateAudio(uid, track){
   }catch(e){ console.log('[REC] activateAudio err '+e); }
 }
 
-function switchMaster(newUid){
-  if(masterUid===newUid) return;
-  masterUid=newUid;
-  const k=uidKey(newUid);
-  const t=audioTracks[k];
-  if(t) activateAudio(k, t);
-  else if(audActive){ try{ audioSrcs[audActive].disconnect(); }catch(e){} delete audioSrcs[audActive]; audActive=null; }
+/* 主主播固定为第一个视频源, 一旦确定永不换人(下播/连麦都不换) */
+function setMaster(uid){
+  if(masterUid!==null) return;
+  masterUid=uidKey(uid);
+  const t=audioTracks[masterUid];
+  if(t) activateAudio(masterUid, t);
 }
 
 /* ---------- 画布采集: 主全屏 + 嘉宾画中画 ---------- */
@@ -152,12 +142,11 @@ async function main(){
     try{ await client.subscribe(user, mt); }catch(e){}
     if(mt==='video'){
       try{ client.setRemoteVideoStreamType(user.uid, 0); }catch(e){}
-      const hadMaster = (masterUid!==null);
       setupVideo(user.uid, user.videoTrack);
-      if(!hadMaster){ switchMaster(uidKey(user.uid)); }
-      else { window.__STATE__.peers = Object.keys(vids).filter(k=>hasData(vids[k])).length; }
       st('video-ready');
       tryStartRecord();
+      // 主主播: 第一个视频源就是主, 此后绝不换人
+      if(masterUid===null){ setMaster(user.uid); }
     }
     if(mt==='audio'){
       const mt2 = user.audioTrack && user.audioTrack.getMediaStreamTrack && user.audioTrack.getMediaStreamTrack();
