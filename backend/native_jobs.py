@@ -100,8 +100,37 @@ def _plat_name(plat_id):
         return {"474": "密语", "449": "半糖"}.get(str(plat_id), "plat%s" % plat_id)
 
 
+def _faststart(src_local, dst):
+    """把 mp4 重封装为 moov 前置(faststart)：播放器秒开, 不再等整文件扫完。
+
+    -c copy 纯流拷贝零重编码(画质不变), 只重写容器头; 大文件 IO 耗时背景线程可接受。
+    返回 True=成功(此时 src_local 已可删), False=失败(调用方保留原件兜底)。
+    """
+    tmp = dst + ".fs.tmp.mp4"
+    try:
+        cmd = [C.FFMPEG, "-y", "-loglevel", "error", "-i", src_local,
+               "-c", "copy", "-movflags", "+faststart", tmp]
+        r = subprocess.run(cmd, timeout=1800, capture_output=True)
+        if r.returncode != 0 or not os.path.exists(tmp) or os.path.getsize(tmp) <= 0:
+            print("[NATIVE] faststart 失败 rc=%s %s" % (r.returncode, r.stderr[-300:]))
+            try: os.remove(tmp)
+            except Exception: pass
+            return False
+        os.replace(tmp, dst)
+        return True
+    except Exception as e:
+        print("[NATIVE] faststart 异常:", e)
+        try: os.remove(tmp)
+        except Exception: pass
+        return False
+
+
 def _place(src_local, plat_name, anchor, name_tag):
-    """把已拉到本地的 src_local 放进 REC_DIR 暂存(三级), 并复制归档 FINAL_REC_DIR。"""
+    """把已拉到本地的 src_local 放进 REC_DIR 暂存(三级), 并**移动**归档 FINAL_REC_DIR。
+
+    归档时先 ffmpeg -movflags +faststart 重封装(moov 前置, 播放秒开),
+    成功则删除暂存原件; 重封装失败则直接移动兜底。
+    """
     stamp = time.strftime("%Y%m%d-%H%M%S")
     fname = "%s_%s.mp4" % (name_tag, stamp)
     mid_dir = os.path.join(C.REC_DIR, _sanitize(plat_name), anchor)
@@ -116,11 +145,16 @@ def _place(src_local, plat_name, anchor, name_tag):
         fdir = os.path.join(C.FINAL_REC_DIR, _sanitize(plat_name), anchor)
         os.makedirs(fdir, exist_ok=True)
         final = os.path.join(fdir, fname)
-        if os.path.exists(final):
-            os.remove(final)
-        shutil.move(mid, final)
+        # faststart 重封装到最终目录(顺带把原件清掉)
+        if _faststart(mid, final):
+            try: os.remove(mid)
+            except Exception: pass
+        else:
+            if os.path.exists(final):
+                os.remove(final)
+            shutil.move(mid, final)
     except Exception as e:
-        print("[NATIVE] 归档移动失败(保留暂存):", e)
+        print("[NATIVE] 归档失败(保留暂存):", e)
         final = mid if (final is None) else final
     return mid, final
 

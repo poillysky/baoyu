@@ -664,8 +664,39 @@ async def _watchdog(task):
             task["restarting"] = False
 
 
-def _archive_final(task):
-    """web 录制完成后: 把成品段**移动**进 FINAL_REC_DIR 最终归档(机械盘)。
+async def _faststart_mp4(mp4):
+    """把 mp4 原地重封装为 moov 前置(faststart): 播放器秒开, 不用等整文件扫完。
+
+    fragmented/webm容器混装等一律 `-c copy` 纯流拷贝(零重编码, 画质不变),
+    只重写容器头。大文件 IO 走异步子进程不阻塞事件循环。
+    返回 True=已重封装, False=失败(调用方保留原件兜底, 不阻断归档)。
+    """
+    if not mp4 or not os.path.exists(mp4) or os.path.getsize(mp4) < 4096:
+        return False
+    tmp = mp4 + ".fs.tmp.mp4"
+    try:
+        p = await asyncio.create_subprocess_exec(
+            C.FFMPEG, "-y", "-loglevel", "error", "-i", mp4,
+            "-c", "copy", "-movflags", "+faststart", tmp,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await asyncio.wait_for(p.communicate(), timeout=1800)
+        if p.returncode != 0 or not os.path.exists(tmp) or os.path.getsize(tmp) <= 0:
+            log("faststart 失败, 保留原件", mp4, (err or b"")[-200:])
+            try: os.remove(tmp)
+            except Exception: pass
+            return False
+        os.replace(tmp, mp4)
+        return True
+    except Exception as e:
+        log("faststart 异常, 保留原件", mp4, repr(e))
+        try: os.remove(tmp)
+        except Exception: pass
+        return False
+
+
+async def _archive_final(task):
+    """web 录制完成后: 先把成品段 faststart 重封装(moov 前置秒开),
+    再**移动**进 FINAL_REC_DIR 最终归档(机械盘)。
 
     目录结构对齐项目规范: {FINAL_REC_DIR}/{plat_dir}/{folder}/{原名}。
     移动即删除暂存原件, 文件只保留最终一份。失败只记日志不阻断。
@@ -684,6 +715,8 @@ def _archive_final(task):
         if not mp4 or not os.path.exists(mp4) or os.path.getsize(mp4) <= 0:
             continue
         try:
+            # 先转 faststart(moov 前置), 失败保留 fragmented 原件
+            await _faststart_mp4(mp4)
             dst = os.path.join(fdir, os.path.basename(mp4))
             if os.path.exists(dst):
                 os.remove(dst)
@@ -731,7 +764,7 @@ async def _finalize(task, reason="stop"):
     # 录制收尾后把成品归档到最终目录(机械盘), 失败不阻断
     if task["state"] == "done":
         try:
-            _archive_final(task)
+            await _archive_final(task)
         except Exception as e:
             log("归档异常", repr(e))
     log("finalize rec", task.get("rec_id"), "reason", reason, "mp4_ok", mp4_ok,
