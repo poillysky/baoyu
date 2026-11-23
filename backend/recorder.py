@@ -693,6 +693,10 @@ def _archive_final(task):
                 task["final_mp4"] = dst
             if task.get("mp4_path") == mp4:
                 task["mp4_path"] = dst
+            segs = task.get("segments") or []
+            if mp4 in segs:
+                segs[segs.index(mp4)] = dst
+                task["segments"] = segs
             log("已移动归档最终目录(删除暂存)", dst)
         except Exception as e:
             log("归档移动失败(保留暂存)", mp4, repr(e))
