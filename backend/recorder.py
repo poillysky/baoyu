@@ -26,6 +26,7 @@ _PW = None
 _LOOP = None
 _WS_SERVER = None
 _WS_PORT = None
+_LAST_ACTIVE = time.time()   # 最近一次浏览器活动时间(任务启动/数据到达时刷新)
 
 # 串行转码队列 (避免多段 ffmpeg 同时抢 CPU)
 _TRANSCODE_Q = None         # asyncio.Queue
@@ -110,6 +111,7 @@ async def _get_browser():
             executable_path=C.CHROMIUM,
             headless=True,
             args=_CHROMIUM_ARGS)
+        _LAST_ACTIVE = time.time()
         log("Chromium started (single-browser mode)")
         return _BROWSER
 
@@ -373,14 +375,88 @@ async def _on_disconnect(task):
     user_stop = bool(task.get("user_stopped"))
     await _save_current_segment(task, reason="disconnect")   # 断连保文件
     if user_stop:
-        task["state"] = "done"; task["restarting"] = False; _notify_stats(); return
+        task["state"] = "done"; task["restarting"] = False
+        task["finished_at"] = time.time()
+        await _close_ctx(task)   # 下播/主动停: 释放 tab
+        _notify_stats(); return
     if task.get("retry", 0) < C.WATCHDOG_MAX_RETRY:
         log("断连保文件完成, 看门狗重启继续监守 rec", rec_id)
         task["restarting"] = False
         asyncio.create_task(_watchdog(task))
     else:
         log("断连且达最大重试, 停止监守 rec", rec_id)
-        task["state"] = "interrupted"; task["restarting"] = False; _notify_stats()
+        task["state"] = "interrupted"; task["restarting"] = False
+        task["finished_at"] = time.time()
+        await _close_ctx(task)   # 重试耗尽: 释放 tab
+        _notify_stats()
+
+
+async def _close_ctx(task):
+    """关闭浏览器的 context/page（释放 tab 与 renderer 进程），幂等。
+    录制结束/下播/重试耗尽后调用，避免空闲 tab 长期占用浏览器进程。"""
+    try:
+        if task.get("ctx"):
+            await asyncio.wait_for(task["ctx"].close(), timeout=10)
+    except Exception:
+        pass
+    try:
+        if not task.get("ctx") and task.get("page"):
+            await task["page"].close()
+    except Exception:
+        pass
+    task["ctx"] = None
+    task["page"] = None
+
+
+async def _task_reaper():
+    """后台清理：已结束任务(done/fail/interrupted/failed)在 _TASKS 保留
+    TASK_KEEP_SEC(默认300s) 供前端查看后移除，释放 task 引用/cred/句柄。"""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            now = time.time()
+            keep = float(os.environ.get("TASK_KEEP_SEC", "300"))
+            with _TASKS_LOCK:
+                dead = [k for k, t in _TASKS.items()
+                        if (t.get("finalized") or t.get("state") in ("done", "fail", "interrupted", "failed"))
+                        and (t.get("finished_at") or t.get("started_at") or 0)
+                        and now - (t.get("finished_at") or t.get("started_at") or now) > keep]
+                for k in dead:
+                    _TASKS.pop(k, None)
+            if dead:
+                log("task reaper 清理结束任务", len(dead))
+        except Exception as e:
+            log("task_reaper err", repr(e))
+
+
+async def _idle_browser_reaper():
+    """后台清理：无活动任务且空闲超过 IDLE_BROWSER_SEC(默认60s) 时关闭全局
+    Chromium，释放浏览器进程/内存。下次 _get_browser 会自动重新 launch。"""
+    global _BROWSER, _PW, _LAST_ACTIVE
+    while True:
+        await asyncio.sleep(20)
+        try:
+            if _BROWSER is None:
+                continue
+            with _TASKS_LOCK:
+                active = any(t.get("state") in ("starting", "recording", "restarting", "stopping", "saved")
+                             and not t.get("finalized") for t in _TASKS.values())
+            idle_sec = float(os.environ.get("IDLE_BROWSER_SEC", "60"))
+            if not active and time.time() - _LAST_ACTIVE > idle_sec:
+                log("浏览器空闲超过 %.0fs, 关闭全局 Chromium 释放资源" % idle_sec)
+                try:
+                    await _BROWSER.close()
+                except Exception:
+                    pass
+                try:
+                    if _PW is not None:
+                        await _PW.stop()
+                except Exception:
+                    pass
+                _BROWSER = None
+                _PW = None
+        except Exception as e:
+            log("idle_browser_reaper err", repr(e))
 
 
 async def _save_current_segment(task, reason="disconnect"):
@@ -440,6 +516,7 @@ async def _open_page(task):
     task["ctx"] = ctx
     page = await ctx.new_page()
     task["page"] = page
+    _LAST_ACTIVE = time.time()
     # 新页面 = 新 WS = 会重发 __mime__, 重置对齐标志让 ffmpeg 重新按真实 mime 参数启动
     task["_ff_aligned"] = False
     task["rec_mime"] = None
@@ -602,6 +679,8 @@ async def _watchdog(task):
     if task["retry"] >= C.WATCHDOG_MAX_RETRY:
         log("watchdog 达到最大重试, 放弃 rec", task["rec_id"])
         task["state"] = "failed"
+        task["finished_at"] = time.time()
+        await _close_ctx(task)   # 重试耗尽: 释放 tab, 不再重启
         _notify_stats()
         return
     task["_watchdog_running"] = True
@@ -610,13 +689,7 @@ async def _watchdog(task):
         task["restarting"] = True
         log("watchdog 重启录制 rec=%s retry=%d" % (task["rec_id"], task["retry"]))
         # 关闭旧 context(含 page) + 收尾当前段(作为 part 保留)
-        try:
-            if task.get("ctx"):
-                await task["ctx"].close(); task["ctx"] = None
-            elif task.get("page"):
-                await task["page"].close()
-        except Exception:
-            pass
+        await _close_ctx(task)
         if task.get("finalized") or task.get("user_stopped"):
             return
         seg = task.get("seg", 0)
@@ -767,9 +840,14 @@ async def _finalize(task, reason="stop"):
             await _archive_final(task)
         except Exception as e:
             log("归档异常", repr(e))
+    # 释放浏览器 tab/context(web 任务), 直录无 ctx 幂等
+    if task.get("mode") != "direct":
+        await _close_ctx(task)
+    task["finished_at"] = time.time()
     log("finalize rec", task.get("rec_id"), "reason", reason, "mp4_ok", mp4_ok,
         "segments", len(task["segments"]))
     _notify_stats()
+    _LAST_ACTIVE = time.time()   # 刚释放页面, 立即允许空闲关闭浏览器
     return {"ok": True, "rec_id": task.get("rec_id"), "mp4": task["final_mp4"],
             "state": task["state"], "segments": task.get("segments", [])}
 
@@ -808,13 +886,7 @@ async def stop_record(rec_id):
     except Exception as e:
         log("stop eval err", e)
     await asyncio.sleep(1.2)
-    try:
-        if task.get("ctx"):
-            await asyncio.wait_for(task["ctx"].close(), timeout=10); task["ctx"] = None
-        elif page:
-            await page.close()
-    except Exception as e:
-        log("stop ctx close err", e)
+    await _close_ctx(task)   # 统一关闭(幂等; _finalize 里也会再关一次, 无碍)
     # 等待断连回调(若有)完成当前段保存, 避免与其并发重复转码/竞态
     dt = task.get("_disc_task")
     if dt:
@@ -905,6 +977,8 @@ def _ensure_loop():
             _TRANSCODE_Q = asyncio.Queue()
             loop.run_until_complete(_start_ws_server())
             loop.create_task(_transcode_worker())
+            loop.create_task(_task_reaper())
+            loop.create_task(_idle_browser_reaper())
             loop.run_forever()
         threading.Thread(target=run, daemon=True, name="recorder-loop").start()
         for _ in range(50):
