@@ -10,8 +10,8 @@ canvas{width:0;height:0}
 <script>
 // 录制页 v2(连麦/多主播):
 //   - 多主播同时显示: 主主播全屏 + 嘉宾画中画(右下角, 最多3个)
-//   - 音频全混音(所有 remote audio track 汇入 WebAudio 输出)
-//   - 主播下播/连线切换不中断: 主主播消失自动把嘉宾升为主; 页面异常绝不抛到外层
+//   - 音频只混主主播(实际在录的): 嘉宾/连麦声音不录
+//   - 主主播下播自动把嘉宾升为主; 页面异常绝不抛到外层
 // window.__REC__={appid,channel,token,uid,wsUrl,bitrate,audioBitrate,fps,mimeCands}
 window.__STATE__={state:'init'};
 const R = window.__REC__ || {};
@@ -19,10 +19,11 @@ const CV = document.getElementById('cv');
 const CTX = CV.getContext('2d', {alpha:false});
 let client=null, drawTimer=null, rec=null, ws=null;
 let vw=720, vh=1280;
-let masterUid=null;          // 当前主主播
+let masterUid=null;          // 当前主主播(画面+声音都以它为准)
 const vids={};               // uid -> {video, track}
-const audioSrcs={};          // uid -> AudioNode(断开用)
-let audioCtx=null, audioDest=null;
+const audioTracks={};        // uid -> MediaStreamTrack(全部订阅的, 备用)
+const audioSrcs={};          // uid -> AudioNode(只会有当前主的一个)
+let audioCtx=null, audioDest=null, audActive=null;
 let audioAny=false, videoAny=false;
 
 function st(s){ window.__STATE__.state=s; console.log('[REC] '+s); }
@@ -55,15 +56,29 @@ function hasData(vd){
 
 function master(){
   if(masterUid!==null && vids[masterUid] && hasData(vids[masterUid])) return vids[masterUid];
-  // 主无效 -> 提升第一个有数据的
-  for(const k in vids){ if(hasData(vids[k])){ masterUid=k; return vids[k]; } }
+  // 主无效 -> 提升第一个有数据的, 声音也切到新主
+  for(const k in vids){
+    if(hasData(vids[k])){
+      switchMaster(k);
+      return vids[k];
+    }
+  }
   return null;
 }
 
 function cleanupUid(uid, mt){
   const k=uidKey(uid);
   if(mt==='audio' || !mt){
-    if(audioSrcs[k]){ try{ audioSrcs[k].disconnect(); }catch(e){} delete audioSrcs[k]; }
+    delete audioTracks[k];
+    if(audActive===k){
+      if(audioSrcs[k]){ try{ audioSrcs[k].disconnect(); }catch(e){} delete audioSrcs[k]; }
+      audActive=null;
+      // 主主播没声了 -> 补上当前主画面的声音
+      if(masterUid!==null && masterUid!==k){
+        const t=audioTracks[masterUid];
+        if(t){ activateAudio(masterUid, t); }
+      }
+    }
   }
   if(mt==='video' || !mt){
     if(vids[k]){
@@ -75,19 +90,30 @@ function cleanupUid(uid, mt){
   }
 }
 
-/* ---------- 音频轨管理: 全混音到 audioDest ---------- */
-function mixAudio(uid, track){
+/* ---------- 音频轨管理: 只混当前主主播的声音 ---------- */
+function activateAudio(uid, track){
+  const k=uidKey(uid);
   try{
-    const k=uidKey(uid);
-    if(audioSrcs[k]){ try{ audioSrcs[k].disconnect(); }catch(e){} delete audioSrcs[k]; }
+    if(audActive!==null && audActive!==k){
+      if(audioSrcs[audActive]){ try{ audioSrcs[audActive].disconnect(); }catch(e){} delete audioSrcs[audActive]; }
+      audActive=null;
+    }
+    if(audActive===k && audioSrcs[k]) return;   // 已激活跳过
     if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); audioDest = audioCtx.createMediaStreamDestination(); }
-    const mt = track.getMediaStreamTrack && track.getMediaStreamTrack();
-    if(!mt) return;
-    const src = audioCtx.createMediaStreamSource(new MediaStream([mt]));
+    const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
     src.connect(audioDest);
     audioSrcs[k]=src;
-    audioAny=true;
-  }catch(e){ console.log('[REC] mixAudio err '+e); }
+    audActive=k;
+  }catch(e){ console.log('[REC] activateAudio err '+e); }
+}
+
+function switchMaster(newUid){
+  if(masterUid===newUid) return;
+  masterUid=newUid;
+  const k=uidKey(newUid);
+  const t=audioTracks[k];
+  if(t) activateAudio(k, t);
+  else if(audActive){ try{ audioSrcs[audActive].disconnect(); }catch(e){} delete audioSrcs[audActive]; audActive=null; }
 }
 
 /* ---------- 画布采集: 主全屏 + 嘉宾画中画 ---------- */
@@ -125,16 +151,22 @@ async function main(){
   client.on('user-published', async (user, mt)=>{
     try{ await client.subscribe(user, mt); }catch(e){}
     if(mt==='video'){
-      // 强订高码率主流(大流)
       try{ client.setRemoteVideoStreamType(user.uid, 0); }catch(e){}
+      const hadMaster = (masterUid!==null);
       setupVideo(user.uid, user.videoTrack);
-      if(masterUid===null){ masterUid=uidKey(user.uid); }
+      if(!hadMaster){ switchMaster(uidKey(user.uid)); }
+      else { window.__STATE__.peers = Object.keys(vids).filter(k=>hasData(vids[k])).length; }
       st('video-ready');
       tryStartRecord();
     }
     if(mt==='audio'){
-      if(user.audioTrack){ mixAudio(user.uid, user.audioTrack); }
+      const mt2 = user.audioTrack && user.audioTrack.getMediaStreamTrack && user.audioTrack.getMediaStreamTrack();
+      if(mt2){
+        audioTracks[uidKey(user.uid)] = mt2;
+        if(masterUid===uidKey(user.uid)){ activateAudio(user.uid, mt2); }
+      }
       window.__STATE__.audio=true;
+      audioAny=true;
       tryStartRecord();
     }
   });
