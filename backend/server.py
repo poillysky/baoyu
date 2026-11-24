@@ -795,6 +795,7 @@ class Handler(BaseHTTPRequestHandler):
                     cred = {
                         "appid": res["appid"], "channel": res["channel"],
                         "token": res["token"], "uid": res["uid"],
+                        "real_room_id": res.get("real_room_id"),
                         "mode": res.get("mode"), "play_url": res.get("play_url") or ""}
                     out = REC.api_start(rid, pid, cred, name=res.get("name"))
                     out["name"] = res.get("name"); out["room_id"] = rid
@@ -973,6 +974,27 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # 容器内 Python 是 PID 1: 不自动回收子进程 -> chrome/crashpad 僵尸越积越多。
+    # 把 SIGCHLD 设为 SIG_IGN, 让内核自动 reap 已退出的子进程(僵尸不再堆积)。
+    try:
+        import signal as _sig
+        _sig.signal(_sig.SIGCHLD, _sig.SIG_IGN)
+    except Exception:
+        pass
+    # 兜底: 后台定期 reap(某些 libc 对 SIG_IGN+SIGCHLD 行为不同, 双保险)
+    try:
+        import threading as _th, os as _os
+        def _reap():
+            while True:
+                try:
+                    while _os.waitpid(-1, _os.WNOHANG)[0] > 0:
+                        pass
+                except Exception:
+                    pass
+                time.sleep(30)
+        _th.Thread(target=_reap, daemon=True).start()
+    except Exception:
+        pass
     CL.ensure_token()
     HUB.set_snapshot_provider(_snapshot)
     HUB.start()

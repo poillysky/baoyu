@@ -365,6 +365,7 @@ def _start_for(rid, plat_id, it):
         cred = {
             "appid": res["appid"], "channel": res["channel"],
             "token": res["token"], "uid": res["uid"],
+            "real_room_id": res.get("real_room_id"),
             "mode": res.get("mode"), "play_url": res.get("play_url") or "",
             "name": res.get("name") or it.get("name"),
         }
@@ -403,8 +404,11 @@ def _monitor_interval():
 
 
 _GROWTH = {}          # room_id -> [probe1, probe2, probe3] 每元素 (ts, bytes, dur)
-_GROWTH_MAX = 3       # 记录最近三轮的快照, 判断文件是否在增长
-_GROWTH_STALL = 2     # 连续几轮无增长判异常(防抖; ~2*WATCH_INTERVAL 秒)
+_GROWTH_MAX = 6       # 记录最近几轮的快照, 判断文件是否在增长
+# 连续几轮无增长才判异常重启。拉长容忍: 主播短暂卡顿/换人/连麦抖动本来会自愈,
+# 不该几秒不长就重启把连续文件切成碎片(降画质问题, 只是判异常变耐心)。
+# 真下播由平台在线状态(_OFFLINE_STREAK_STOP)判, 不受影响; 页面真崩由 ws 关闭快速触发。
+_GROWTH_STALL = int(os.environ.get("GROWTH_STALL_ROUNDS", "5"))   # ≈5*WATCH_INTERVAL 秒
 
 
 def _probe_growth(rid, it, rec):
@@ -455,6 +459,25 @@ def _tick():
 def _tick_inner():
     """执行一轮: 检查清单每房 -> 开播自动录 / 下播自动停。"""
     watch = _watch_snapshot()
+    # 孤儿任务清理: 活跃录制任务(recording/starting/restarting)其房已不在 watchlist,
+    # 或该监控房 enabled=False -> 停掉, 防止"移出监控后录制还在跑"(移除与后台停录竞态残留)。
+    try:
+        for r in _all_status():
+            rrid = str(r.get("room_id"))
+            rstate = r.get("state")
+            if rstate not in ("recording", "starting", "restarting"):
+                continue
+            wit = watch.get(rrid)
+            orphan = (wit is None) or (wit.get("enabled") is False)
+            if orphan:
+                try:
+                    _stop_any(r.get("rec_id"))
+                    log("孤儿任务清理: 房已不在监控, 停止录制", rrid, r.get("rec_id"))
+                except Exception:
+                    pass
+                _STATE.pop(rrid, None)
+    except Exception as e:
+        log("孤儿清理异常", repr(e))
     if not watch:
         return
     if CL.switching():

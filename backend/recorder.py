@@ -150,6 +150,18 @@ async def _start_ff(task, mp4, copy_video=None):
     直录任务(task['mode']=='direct'): 从源 URL 拉流。
     copy_video 未指定时按 task['rec_mime'] 判断是否已出 h264。"""
     await _stop_ff(task, finalize=False)
+    # ★防覆盖丢数据: 目标文件已存在且有内容 -> 自动换唯一名。
+    # _ff_args 用 -y 会截断同名文件; 断连/重连/mime重对齐若复用同名会丢失已录数据。
+    if mp4 and os.path.exists(mp4) and os.path.getsize(mp4) > 0:
+        _base, _ext = os.path.splitext(mp4)
+        _i = 1
+        _cand = "%s_%d%s" % (_base, _i, _ext)
+        while os.path.exists(_cand):
+            _i += 1
+            _cand = "%s_%d%s" % (_base, _i, _ext)
+        log("ffmpeg 目标已存在有数据, 防覆盖改用", os.path.basename(_cand))
+        mp4 = _cand
+    task["mp4_path"] = mp4
     is_direct = task.get("mode") == "direct"
     if copy_video is None:
         if is_direct:
@@ -559,6 +571,7 @@ async def _open_page(task):
     rec_cfg = {
         "appid": cred["appid"], "channel": cred["channel"],
         "token": cred["token"], "uid": int(cred.get("uid") or 0),
+        "realRoomId": str(cred.get("real_room_id") or ""),
         "wsUrl": "ws://127.0.0.1:%d/recv/%s" % (_WS_PORT, task["rec_id"]),
         "bitrate": C.VIDEO_BITRATE, "audioBitrate": C.AUDIO_BITRATE,
         "fps": C.CAPTURE_FPS, "mimeCands": C.REC_MIME_CANDS,

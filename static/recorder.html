@@ -98,12 +98,80 @@ function activateAudio(uid, track){
   }catch(e){ console.log('[REC] activateAudio err '+e); }
 }
 
-/* 主主播固定为第一个视频源, 一旦确定永不换人(下播/连麦都不换) */
-function setMaster(uid){
+/* 主主播锁定(按老大最终指令 m05216: 强制匹配 real_room_id, 不对就重试):
+   真正要录的主播 = uid 等于服务器下发的 real_room_id 的那一路(R.realRoomId)。
+   实测: 半糖连麦房 主播uid==real_room_id, 客播uid永远≠real_room_id。
+   策略:
+     1) realRoomId 已知: 只锁 uid==realRoomId; 该 uid 出了真帧即锁定。
+        若一直等不到它出帧(可能换人过渡/尚未推流), 保留 realFrame 兜底但优先它。
+     2) realRoomId 未知(接口 record not found/VIP): 退回"稳定出真帧"兜底。
+     3) 主播换人: real_room_id 可能滞后, 用 _checkMasterAlive 迁移到"持续出真帧的另一 uid"。
+   锁定后全程用这个 uid 认主播, 连麦绝不换; 一直录到主播下播。 */
+let _lockTimer=null;
+const _LOCK_POLL_MS=150;     // 密集轮询, 尽快抓第一个真正出画面的 uid
+const _MIN_W=480;            // 真分辨率阈值(宽): 主播 540/720; 客播订阅初期 res=None/0
+const TARGET = R.realRoomId ? String(R.realRoomId) : "";   // 目标主播uid(=real_room_id)
+
+function realFrame(vd){
+  try{ return !!(vd && vd.video && vd.video.videoWidth>=_MIN_W && vd.video.readyState>=2); }catch(e){ return false; }
+}
+
+function _doLock(uid, why){
   if(masterUid!==null) return;
   masterUid=uidKey(uid);
+  if(_lockTimer){ clearInterval(_lockTimer); _lockTimer=null; }
   const t=audioTracks[masterUid];
   if(t) activateAudio(masterUid, t);
+  try{ diag({ev:'masterLock', uid:masterUid, why:why, target:TARGET}); }catch(e){}
+}
+
+function _evalMaster(){
+  if(masterUid!==null){ if(_lockTimer){clearInterval(_lockTimer);_lockTimer=null;} return; }
+  // 1) 有 real_room_id: 强制等目标 uid 出真帧, 出了就锁(最高优先级)
+  if(TARGET && vids[TARGET] && realFrame(vids[TARGET])){ _doLock(TARGET, 'realroom-match'); return; }
+  // 2) 目标 uid 还没出帧(过渡/未推流): 先不锁, 继续等它; 
+  //    但若已等了足够久且目标仍未出现, 才允许兜底锁别的稳定出帧 uid(防一直黑屏)
+  if(TARGET){
+    if(!_lockWaitStart) _lockWaitStart=Date.now();
+    const waited = Date.now()-_lockWaitStart;
+    if(vids[TARGET]===undefined && Object.keys(vids).length>0 && waited>_TARGET_GRACE_MS){
+      // 目标 uid 根本没进房(可能换人): 兜底锁第一个真帧
+      for(const k in vids){ if(realFrame(vids[k])){ _doLock(k, 'fallback-target-absent'); return; } }
+    }
+    return;  // 目标已订阅但还没出帧: 继续等
+  }
+  // 3) 无 real_room_id: 第一个真正出画面(realFrame)的 uid 兜底
+  for(const k in vids){
+    if(realFrame(vids[k])){ _doLock(k, 'first-real-frame-fallback'); return; }
+  }
+}
+
+let _lockWaitStart=0;
+const _TARGET_GRACE_MS=6000;   // 目标uid缺席多久后允许兜底锁别的uid
+
+function ensureLockTimer(){
+  if(masterUid===null && !_lockTimer && Object.keys(vids).length>0){
+    _evalMaster();
+    if(masterUid===null){ _lockTimer=setInterval(_evalMaster, _LOCK_POLL_MS); }
+  }
+}
+
+/* 主播锁定后【永不换人】(老大最终指令 m05343):
+   一旦 masterUid 锁定 = real_room_id, 主播后面换连麦对象/客播进出/主播短暂断流,
+   都绝不再切换 masterUid。主播画面没了 master() 返回 null -> draw() 画黑屏继续录,
+   MediaRecorder 全程不中断; 主播回来(同 uid 重新出帧)自动恢复画面。
+   这里只做"存活监测+诊断日志", 不迁移、不换人。 */
+let _masterLostAt=0;
+function _checkMasterAlive(){
+  if(masterUid===null) return;
+  const mv=vids[masterUid];
+  const alive=realFrame(mv);
+  if(alive){ _masterLostAt=0; return; }
+  if(!_masterLostAt){
+    _masterLostAt=Date.now();
+    try{ diag({ev:'masterLost', master:masterUid, why:'no-frame(保持锁不定不换人)'}); }catch(e){}
+  }
+  // 不迁移、不换人: 保持 masterUid, 黑屏等待主播回来
 }
 
 /* ---------- 画布采集: 只画主主播(不要画中画) ---------- */
@@ -168,12 +236,15 @@ async function main(){
     }catch(_){}
   });
 client.on('user-published', async (user, mt)=>{
+    try{ diag({ev:'pub', uid:uidKey(user.uid), mt:mt, n:(window.__STATE__.pubN=(window.__STATE__.pubN||0)+1), ms:performance.now()|0}); }catch(e){}
     try{ await client.subscribe(user, mt); }catch(e){}
     if(mt==='video'){
       try{ client.setRemoteVideoStreamType(user.uid, 0); }catch(e){}
       setupVideo(user.uid, user.videoTrack);
-      // 主主播: 第一个视频源就是主, 此后绝不换人
-      if(masterUid===null){ setMaster(user.uid); }
+      // 主播锁定: 强制匹配 real_room_id(见 _evalMaster); 目标 uid 出了真帧即锁
+      if(masterUid===null){ ensureLockTimer(); }
+      // 主播重新发布(重连/换轨)时, 若是当前主身份则重置失联计时
+      if(masterUid!==null && uidKey(user.uid)===masterUid){ _masterLostAt=0; }
       // 只在还没开录时置 video-ready 并尝试开录; 已在 recording 不得重置状态
       // (否则后端轮询等不到 recording 会 25s 超时误杀页面 -> 无限重启)
       if(!recStarted){ st('video-ready'); tryStartRecord(); }
@@ -254,11 +325,24 @@ function startRecord(){
 }
 
 // 页面级看门狗: 每秒检查一次 MediaRecorder/ws 存活, 抛异常进 diag(不中断录制)
+let _dbgTick=0;
 setInterval(()=>{
   try{
+    // 诊断: 前20秒每3秒 dump 一次 uid 到达顺序+videoWidth(定位主播选择), 之后不再刷屏
+    if(++_dbgTick<=7 && _dbgTick%3===0){
+      const snap={}; const order=[];
+      for(const k in vids){
+        let w=0,h=0,rs=0;
+        try{ w=vids[k].video.videoWidth||0; h=vids[k].video.videoHeight||0; rs=vids[k].video.readyState||0; }catch(e){}
+        snap[k]=w+'x'+h+' rs'+rs;
+        order.push(k);
+      }
+      diag({ev:'vidSnap', master:masterUid, order:order.join(','), snap:snap});
+    }
+    // 主播失联/重连/换人: 检测并迁移主身份(防黑屏)
+    _checkMasterAlive();
     if(rec && document.visibilityState==='visible'){
-      if(rec.state!=='recording' && rec.state!=='inactive'){
-        diag({ev:'recstate', cur:rec.state, mime:window.__STATE__.mime, hasAudio:window.__STATE__.hasAudio, bytes:window.__STATE__.bytes||0});
+      if(rec.state!=='recording' && rec.state!=='inactive'){        diag({ev:'recstate', cur:rec.state, mime:window.__STATE__.mime, hasAudio:window.__STATE__.hasAudio, bytes:window.__STATE__.bytes||0});
       }
       if(!ws || ws.readyState!==1){
         diag({ev:'wsdead', ready:ws?ws.readyState:-1});
