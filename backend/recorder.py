@@ -906,18 +906,19 @@ async def _mp4_playable(path):
             dur = float((out1 or b"").decode().strip() or 0)
         except Exception:
             dur = 0.0
-        # 2) 完整解码校验, 只把"致命"错误当死文件
+        # 2) 完整解码校验, 只把"结构性损坏"当死文件
         p = await asyncio.create_subprocess_exec(
             C.FFMPEG, "-v", "error", "-i", path, "-f", "null", "-",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         _, err = await asyncio.wait_for(p.communicate(), timeout=1800)
         errs = (err or b"").decode("utf-8", "ignore").lower()
-        # 致命标志: 数据截断/无法解析(真死文件)。非单调dts/少量解码告警不算。
-        fatal = any(k in errs for k in (
-            "partial file", "invalid nal", "invalid data found",
-            "moov atom not found", "could not find codec parameters",
-            "no such file", "truncat"))
-        ok = (dur > 0.5) and (not fatal)
+        # 结构性损坏(真死文件): 无法解析容器/无 moov/无 codec。
+        # 注意 "partial file"(尾部截断)不算死: 只要时长>0.5, 大部分内容可播即可保留。
+        structural_fatal = any(k in errs for k in (
+            "invalid data found", "moov atom not found",
+            "could not find codec parameters", "no such file",
+            "invalid nal"))
+        ok = (dur > 0.5) and (not structural_fatal)
         return ok, dur
     except Exception as e:
         log("playable 异常", repr(e))
@@ -925,14 +926,21 @@ async def _mp4_playable(path):
 
 
 async def _repair_mp4(src, dst):
-    """尝试用 ffmpeg -c copy 重封装修复 mp4(moov 前置)。成功返回 True, 输出到 dst。"""
+    """尝试用 ffmpeg -c copy 重封装修复 mp4(moov 前置)。输出到 dst。
+    注意: 截断文件 ffmpeg 会报 "partial file" 且退出码非0, 但常常已写出可播的
+    完整头部+绝大部分数据(只尾部少一点)。所以不能只看 returncode, 要看产出文件:
+    大小>1KB 且有 moov 前置即视为修复成功(保留可用内容), 免得把好内容误判死。"""
     try:
         p = await asyncio.create_subprocess_exec(
             C.FFMPEG, "-y", "-loglevel", "error", "-i", src,
             "-c", "copy", "-movflags", "+faststart", dst,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         _, err = await asyncio.wait_for(p.communicate(), timeout=1800)
-        if p.returncode == 0 and os.path.exists(dst) and os.path.getsize(dst) > 1024:
+        produced_ok = (os.path.exists(dst) and os.path.getsize(dst) > 1024)
+        if produced_ok and _has_moov_front(dst):
+            if p.returncode != 0:
+                log("repair 退出码非0但产出文件有效(截断文件已救出可用内容)",
+                    os.path.basename(src), (err or b"")[-100:])
             return True
         log("repair 失败", os.path.basename(src), (err or b"")[-150:])
         try: os.remove(dst)
@@ -1009,8 +1017,25 @@ async def _sweep_cache():
                 archived = False
                 # 1) 先尝试 -c copy 重封装到临时(顺便 = 完整解复用复检)
                 if await _repair_mp4(fp, tmpfs):
-                    # 2) 严格校验归档件能完整解码(剔除 mdat 截断等"有moov但坏"的文件)
-                    ok, _ = await _mp4_playable(tmpfs)
+                    # 2) 校验归档件: 只要时长>0.5s 即认为可用(尾部小截断的可播)。
+                    #    修复件已确认 moov 前置有效, 不再用"整段完整解码"卡它——
+                    #    截断文件尾部残段会报 invalid data, 但主体内容完整可播。
+                    ok, dur = await _mp4_playable(tmpfs)
+                    if (not ok) and _has_moov_front(tmpfs):
+                        # 二次机会: 有 moov 前置 + 时长可读 -> 视为可用(救回绝大部分)
+                        try:
+                            p = await asyncio.create_subprocess_exec(
+                                C.FFPROBE if getattr(C, "FFPROBE", "") else "ffprobe",
+                                "-v", "error", "-show_entries", "format=duration",
+                                "-of", "csv=p=0", tmpfs,
+                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                            o, _ = await asyncio.wait_for(p.communicate(), timeout=120)
+                            dur2 = float((o or b"").decode().strip() or 0)
+                        except Exception:
+                            dur2 = 0.0
+                        if dur2 > 0.5:
+                            ok = True
+                            log("sweep 修复件尾部有残段但主体可播(moov前置+dur=%.1fs), 采用" % dur2, fn)
                     if ok:
                         try:
                             os.makedirs(fdir, exist_ok=True)
