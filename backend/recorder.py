@@ -785,6 +785,58 @@ async def _watchdog(task):
             task["restarting"] = False
 
 
+async def _concat_segments(segs, out_mp4):
+    """把多个分段 mp4 用 ffmpeg concat 无缝拼成一个完整 mp4(`-c copy` 纯流拷贝, 零重编, 画质不变)。
+
+    用于: 页面每~5分钟崩一次 / 2GB 切分 产生的 _rN / _partN 碎段, 录制完成时合成一个文件。
+    返回 (ok, 有效段列表)。成功返回 (True, [out_mp4]); 段数<=1 或无有效段直接沿用原列表。
+    失败返回 (False, 原有效段列表), 调用方按原逻辑逐段归档兜底(不丢数据)。
+    """
+    valid = [s for s in segs if s and os.path.exists(s) and os.path.getsize(s) > 0]
+    if len(valid) <= 1:
+        return False, valid
+    tmp_list = out_mp4 + ".concat.txt"
+    try:
+        with open(tmp_list, "w", encoding="utf-8") as f:
+            for s in valid:
+                # concat demuxer 需转义单引号
+                f.write("file '%s'\n" % s.replace("'", "'\\''"))
+        p = await asyncio.create_subprocess_exec(
+            C.FFMPEG, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+            "-i", tmp_list, "-c", "copy", out_mp4,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await asyncio.wait_for(p.communicate(), timeout=1800)
+        if p.returncode != 0 or not os.path.exists(out_mp4) or os.path.getsize(out_mp4) <= 0:
+            log("分段合并失败, 按逐段归档兜底", out_mp4, len(valid), (err or b"")[-200:])
+            try: os.remove(out_mp4)
+            except Exception: pass
+            return False, valid
+        log("分段合并成功", out_mp4, "segments=%d" % len(valid))
+        return True, [out_mp4]
+    except Exception as e:
+        log("分段合并异常, 按逐段归档兜底", repr(e))
+        try: os.remove(out_mp4)
+        except Exception: pass
+        return False, valid
+    finally:
+        try: os.remove(tmp_list)
+        except Exception: pass
+
+
+def _rm_empty_dirs(root):
+    """自底向上删除 root 下的空子目录(不删 root 本身)。用于清理两个缓存录制目录的空文件夹。"""
+    if not root or not os.path.isdir(root):
+        return
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        if os.path.abspath(dirpath) == os.path.abspath(root):
+            continue
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except Exception:
+            pass
+
+
 async def _faststart_mp4(mp4):
     """把 mp4 原地重封装为 moov 前置(faststart): 播放器秒开, 不用等整文件扫完。
 
@@ -832,6 +884,27 @@ async def _archive_final(task):
         os.makedirs(fdir, exist_ok=True)
     except Exception as e:
         log("归档目录创建失败", fdir, repr(e)); return
+    # ★分段合并: >=2 个有效段先用 ffmpeg concat 拼成一个完整 mp4(零重编, 画质不变),
+    #   解决"页面每5分钟崩一次/2GB切分"产生的一堆 _rN/_partN 碎文件问题。
+    #   合并成功 -> 只归档这一个文件, 并删除原分段; 失败 -> 按原逻辑逐段归档兜底(不丢数据)。
+    if len(segs) > 1:
+        base = task.get("base_mp4") or segs[0]
+        merged_name = os.path.basename(base)
+        merged = os.path.join(os.path.dirname(segs[0]), merged_name)
+        if os.path.abspath(merged) in [os.path.abspath(s) for s in segs]:
+            merged = os.path.join(os.path.dirname(segs[0]),
+                                  os.path.splitext(merged_name)[0] + "_merged.mp4")
+        ok, valid = await _concat_segments(segs, merged)
+        if ok:
+            for s in segs:
+                if os.path.abspath(s) != os.path.abspath(merged):
+                    try: os.remove(s)
+                    except Exception: pass
+            task["segments"] = [merged]
+            task["final_mp4"] = merged
+            segs = [merged]
+        else:
+            segs = valid if valid else segs
     for mp4 in segs:
         if not mp4 or not os.path.exists(mp4) or os.path.getsize(mp4) <= 0:
             continue
@@ -854,6 +927,12 @@ async def _archive_final(task):
             log("已移动归档最终目录(删除暂存)", dst)
         except Exception as e:
             log("归档移动失败(保留暂存)", mp4, repr(e))
+    # 归档后清两个缓存录制目录(REC_DIR 暂存 + FINAL_REC_DIR 最终)下的空文件夹
+    try:
+        _rm_empty_dirs(C.REC_DIR)
+        _rm_empty_dirs(C.FINAL_REC_DIR)
+    except Exception as e:
+        log("空目录清理异常", repr(e))
 
 
 async def _finalize(task, reason="stop"):

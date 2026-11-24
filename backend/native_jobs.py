@@ -92,6 +92,20 @@ def _sanitize(s):
     return re.sub(r'[\\/:*?"<>|\s]+', "_", str(s or "")).strip("_")
 
 
+def _rm_empty_dirs(root):
+    """自底向上删除 root 下的空子目录(不删 root 本身)。清理缓存录制目录的空文件夹。"""
+    if not root or not os.path.isdir(root):
+        return
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        if os.path.abspath(dirpath) == os.path.abspath(root):
+            continue
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except Exception:
+            pass
+
+
 def _plat_name(plat_id):
     try:
         from capturers import plat_name
@@ -156,6 +170,9 @@ def _place(src_local, plat_name, anchor, name_tag):
     except Exception as e:
         print("[NATIVE] 归档失败(保留暂存):", e)
         final = mid if (final is None) else final
+    # 归档后清两个缓存录制目录的空文件夹
+    _rm_empty_dirs(C.REC_DIR)
+    _rm_empty_dirs(C.FINAL_REC_DIR)
     return mid, final
 
 
