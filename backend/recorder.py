@@ -721,6 +721,15 @@ async def _direct_monitor(task):
                     task["restarting"] = False
                 return
             task["last_data"] = time.time()
+            # ★direct 模式按文件实际大小判 2GB 切分(web 靠 seg_bytes, direct 必须查磁盘)
+            try:
+                cur = task.get("ff_mp4") or task.get("mp4_path")
+                if cur and os.path.exists(cur) and os.path.getsize(cur) >= C.MAX_SEG_BYTES:
+                    log("direct 达2GB, 切分归档 rec", task.get("rec_id"), os.path.getsize(cur))
+                    # 复用 _roll_segment: 收尾旧段 + 立即归档 + 起新段
+                    await _roll_segment(task)
+            except Exception as e:
+                log("direct 切分检查异常", repr(e))
     finally:
         task["_dm_running"] = False
 
@@ -842,7 +851,254 @@ def _rm_empty_dirs(root):
             pass
 
 
+def _mp4_has_moov(path):
+    """快速判断 mp4 是否含有效 moov(idx) 盒: 顺序读顶层 box 头, 命中 moov 返回 True。
+    读不到/文件过小/异常 返回 False。用于识别"无索引的死文件"。"""
+    try:
+        sz = os.path.getsize(path)
+        if sz < 2048:
+            return False
+        with open(path, "rb") as f:
+            pos = 0
+            # 顶层 box 一般很少(几十个), 顺序扫到 moov 或到 200MB 处
+            while pos + 8 <= sz and pos < 200 * 1024 * 1024:
+                f.seek(pos)
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    return False
+                bsize = int.from_bytes(hdr[0:4], "big")
+                btype = hdr[4:8]
+                if btype == b"moov":
+                    # moov 必须完整落在文件内才算有效索引(防截断死文件误判)
+                    if bsize >= 8 and pos + bsize <= sz:
+                        return True
+                    return False
+                if bsize == 1:   # 64位扩展大小
+                    ext = f.read(8)
+                    if len(ext) < 8:
+                        return False
+                    bsize = int.from_bytes(ext, "big")
+                    if bsize < 16:
+                        return False
+                elif bsize == 0:  # 到文件尾
+                    return False
+                if bsize < 8:
+                    return False
+                pos += bsize
+        return False
+    except Exception:
+        return False
+
+
+async def _mp4_playable(path):
+    """校验 mp4 是否可播: 能读出有效时长(>0.5s) 且能在 -f null 解码时不出现致命错误。
+    注意: "non monotonically increasing dts"(时间戳轻微乱序) 属常见可播情况, 不算死文件;
+    mdat 截断(partial file / Invalid NAL) 才是真死文件。返回 (ok, duration_sec)。"""
+    try:
+        # 1) 先取时长(能读出时长说明容器和索引基本完好)
+        p1 = await asyncio.create_subprocess_exec(
+            C.FFPROBE if getattr(C, "FFPROBE", "") else "ffprobe",
+            "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out1, err1 = await asyncio.wait_for(p1.communicate(), timeout=120)
+        dur = 0.0
+        try:
+            dur = float((out1 or b"").decode().strip() or 0)
+        except Exception:
+            dur = 0.0
+        # 2) 完整解码校验, 只把"致命"错误当死文件
+        p = await asyncio.create_subprocess_exec(
+            C.FFMPEG, "-v", "error", "-i", path, "-f", "null", "-",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await asyncio.wait_for(p.communicate(), timeout=1800)
+        errs = (err or b"").decode("utf-8", "ignore").lower()
+        # 致命标志: 数据截断/无法解析(真死文件)。非单调dts/少量解码告警不算。
+        fatal = any(k in errs for k in (
+            "partial file", "invalid nal", "invalid data found",
+            "moov atom not found", "could not find codec parameters",
+            "no such file", "truncat"))
+        ok = (dur > 0.5) and (not fatal)
+        return ok, dur
+    except Exception as e:
+        log("playable 异常", repr(e))
+        return False, 0.0
+
+
+async def _repair_mp4(src, dst):
+    """尝试用 ffmpeg -c copy 重封装修复 mp4(moov 前置)。成功返回 True, 输出到 dst。"""
+    try:
+        p = await asyncio.create_subprocess_exec(
+            C.FFMPEG, "-y", "-loglevel", "error", "-i", src,
+            "-c", "copy", "-movflags", "+faststart", dst,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await asyncio.wait_for(p.communicate(), timeout=1800)
+        if p.returncode == 0 and os.path.exists(dst) and os.path.getsize(dst) > 1024:
+            return True
+        log("repair 失败", os.path.basename(src), (err or b"")[-150:])
+        try: os.remove(dst)
+        except Exception: pass
+        return False
+    except Exception as e:
+        log("repair 异常", repr(e))
+        try: os.remove(dst)
+        except Exception: pass
+        return False
+
+
+async def _sweep_cache():
+    """兜底扫描修复暂存缓存目录(C.REC_DIR):
+    逐个 mp4 判断 -> 对"死文件/孤儿"做修复或清理, 保证不留无法使用又占空间的文件。
+
+    判定(只处理不在活跃任务里的文件):
+      1) 有 moov 且可播的孤儿文件(录制中断遗留的完整段) -> faststart + 归档到 FINAL_REC_DIR
+      2) 无 moov(中断/崩溃留下的半截死文件) -> 尝试 -c copy 修复; 修好则归档, 修不好则删除
+      3) .fs.tmp / .tmp 等中间残留 -> 删除
+    活跃任务正在写的当前文件绝不碰(按 task.mp4_path/ff_mp4 白名单跳过)。
+    """
+    if not os.path.isdir(C.REC_DIR):
+        return
+    # 收集活跃任务正在写的文件 => 白名单, 绝不碰
+    active_files = set()
+    try:
+        with _TASKS_LOCK:
+            for t in _TASKS.values():
+                if t.get("finalized"):
+                    continue
+                for k in ("mp4_path", "ff_mp4"):
+                    p = t.get(k)
+                    if p:
+                        active_files.add(os.path.abspath(p))
+                for s in (t.get("segments") or []):
+                    if s:
+                        active_files.add(os.path.abspath(s))
+    except Exception:
+        pass
+    # 扫描所有文件
+    now = time.time()
+    for dirpath, dirnames, filenames in os.walk(C.REC_DIR, topdown=False):
+        for fn in filenames:
+            fp = os.path.join(dirpath, fn)
+            afp = os.path.abspath(fp)
+            try:
+                # 中间残留(.fs.tmp/.tmp/.part 的临时) 直接删
+                if fn.endswith(".fs.tmp.mp4") or fn.endswith(".tmp") or ".fs.tmp" in fn:
+                    try: os.remove(fp); log("sweep 删除中间残留", fn)
+                    except Exception: pass
+                    continue
+                if not fn.lower().endswith(".mp4"):
+                    continue
+                if afp in active_files:
+                    continue   # 活跃任务正在写, 跳过
+                # 只处理"安静"了一段时间的文件(避免碰刚写完还没登记的); 活跃任务已在白名单跳过
+                try:
+                    grace = float(os.environ.get("SWEEP_GRACE_SEC", "20"))
+                    if grace > 0 and now - os.path.getmtime(fp) < grace:
+                        continue
+                except Exception:
+                    continue
+                plat_dir = os.path.basename(os.path.dirname(dirpath)) or "plat0"
+                folder = os.path.basename(dirpath) or "unknown"
+                fdir = os.path.join(C.FINAL_REC_DIR, plat_dir, folder)
+                sz = os.path.getsize(fp)
+                if sz <= 1024:
+                    try: os.remove(fp); log("sweep 删除空/超小文件", fn)
+                    except Exception: pass
+                    continue
+                dst = os.path.join(fdir, fn)
+                tmpfs = fp + ".fs.tmp.mp4"
+                archived = False
+                # 1) 先尝试 -c copy 重封装到临时(顺便 = 完整解复用复检)
+                if await _repair_mp4(fp, tmpfs):
+                    # 2) 严格校验归档件能完整解码(剔除 mdat 截断等"有moov但坏"的文件)
+                    ok, _ = await _mp4_playable(tmpfs)
+                    if ok:
+                        try:
+                            os.makedirs(fdir, exist_ok=True)
+                            if os.path.exists(dst): os.remove(dst)
+                            shutil.move(tmpfs, dst)
+                            try: os.remove(fp)
+                            except Exception: pass
+                            log("sweep 修复校验通过归档", dst)
+                            archived = True
+                        except Exception as e:
+                            log("sweep 归档失败", repr(e))
+                    else:
+                        log("sweep 重封装件解码校验失败(数据损坏), 丢弃", fn)
+                    try:
+                        if os.path.exists(tmpfs): os.remove(tmpfs)
+                    except Exception: pass
+                # 3) 重封装都失败: 原件若本身可完整解码 -> 直接移动兜底
+                if not archived:
+                    ok2, dur2 = await _mp4_playable(fp)
+                    if ok2:
+                        try:
+                            os.makedirs(fdir, exist_ok=True)
+                            if os.path.exists(dst): os.remove(dst)
+                            shutil.move(fp, dst)
+                            log("sweep 原件可播直接归档", dst)
+                            archived = True
+                        except Exception as e:
+                            log("sweep 原件移动失败", repr(e))
+                # 4) 仍不行: 大文件(>100MB)宁留勿删 -> 抢救到 recovered/ 隔离区;
+                #    只有小文件/彻底无数据的才物理删除(真正死文件)。
+                if not archived:
+                    try:
+                        big = sz > 100 * 1024 * 1024
+                        if big:
+                            # 抢救: 尝试 -c copy 尽力保留可解部分到 recovered 隔离区(不占主缓存)
+                            rec_dir = os.path.join(C.FINAL_REC_DIR, "_recovered", plat_dir, folder)
+                            os.makedirs(rec_dir, exist_ok=True)
+                            rec_dst = os.path.join(rec_dir, fn)
+                            rec_tmp = rec_dst + ".tmp.mp4"
+                            okr = await _repair_mp4(fp, rec_tmp)
+                            if okr and os.path.exists(rec_tmp) and os.path.getsize(rec_tmp) > 1024:
+                                if os.path.exists(rec_dst): os.remove(rec_dst)
+                                shutil.move(rec_tmp, rec_dst)
+                                try: os.remove(fp)
+                                except Exception: pass
+                                log("sweep 大文件损坏, 已抢救隔离(保留)", rec_dst, sz)
+                            else:
+                                try:
+                                    if os.path.exists(rec_tmp): os.remove(rec_tmp)
+                                except Exception: pass
+                                # 连抢救都失败: 移到隔离区原样保存, 绝不物理删
+                                try:
+                                    qdst = os.path.join(rec_dir, fn + ".broken")
+                                    if os.path.exists(qdst): os.remove(qdst)
+                                    shutil.move(fp, qdst)
+                                    log("sweep 大文件无法抢救, 隔离原样保存(不删)", qdst, sz)
+                                except Exception as e:
+                                    log("sweep 隔离失败, 保留原位", repr(e))
+                        else:
+                            try:
+                                if os.path.exists(fp): os.remove(fp)
+                                log("sweep 删除小死文件", fn, sz)
+                            except Exception: pass
+                    except Exception as e:
+                        log("sweep 大文件处理异常, 保留原位", repr(e))
+            except Exception as e:
+                log("sweep 单项异常", fn, repr(e))
+    # 清空目录
+    try:
+        _rm_empty_dirs(C.REC_DIR)
+    except Exception:
+        pass
+
+
+async def _cache_sweeper():
+    """后台定时兜底: 每隔 SWEEP_INTERVAL(默认180s) 扫描修复暂存缓存, 保证无死文件。"""
+    # 启动先跑一次(清掉上次崩溃/重启遗留的死文件)
+    await asyncio.sleep(15)
+    while True:
+        try:
+            await _sweep_cache()
+        except Exception as e:
+            log("cache_sweeper err", repr(e))
+        await asyncio.sleep(float(os.environ.get("SWEEP_INTERVAL", "180")))
+
+
 async def _faststart_mp4(mp4):
+
     """把 mp4 原地重封装为 moov 前置(faststart): 播放器秒开, 不用等整文件扫完。
 
     fragmented/webm容器混装等一律 `-c copy` 纯流拷贝(零重编码, 画质不变),
@@ -1152,6 +1408,7 @@ def _ensure_loop():
             loop.create_task(_transcode_worker())
             loop.create_task(_task_reaper())
             loop.create_task(_idle_browser_reaper())
+            loop.create_task(_cache_sweeper())
             loop.run_forever()
         threading.Thread(target=run, daemon=True, name="recorder-loop").start()
         for _ in range(50):

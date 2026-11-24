@@ -147,6 +147,9 @@ def _files_list():
         files.extend(glob.glob(p, recursive=True))
     entries = []
     for f in files:
+        # 排除隔离区(损坏抢救文件, 不展示在监控录制列表)
+        if os.sep + "_recovered" + os.sep in f:
+            continue
         try:
             st = os.stat(f)  # 扫描与读取之间文件可能被删除/切段，跳过消失项而不是整请求 500
             entries.append((f, st))

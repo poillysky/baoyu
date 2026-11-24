@@ -55,6 +55,11 @@ FFMPEG = os.environ.get("FFMPEG", "")
 if not FFMPEG:
     import shutil as _sh
     FFMPEG = _sh.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+# ffprobe 通常与 ffmpeg 同目录
+FFPROBE = os.environ.get("FFPROBE", "")
+if not FFPROBE:
+    import shutil as _sh2
+    FFPROBE = _sh2.which("ffprobe") or os.path.join(os.path.dirname(FFMPEG), "ffprobe")
 # ffmpeg 视频编码器: mac 用 videotoolbox 硬编; linux 用 h264 软编/硬编按可用性
 FFMPEG_VENC = os.environ.get("FFMPEG_VENC", "h264_videotoolbox")  # mac 硬编; linux 用 nvenc/libx264
 # ffmpeg(OpenSSL) 用的 CA 包: 部分 CDN(ooat88 系)证书链含自签交叉根, 系统钥匙串判定失败;
@@ -122,7 +127,7 @@ def _detect_board_name():
 
 BOARD_NAME = _detect_board_name()   # 主板/机器名, 用于录制文件命名
 
-MAX_SEG_BYTES = 2 * 1024 * 1024 * 1024   # 2GB 自动切分
+MAX_SEG_BYTES = int(os.environ.get("MAX_SEG_BYTES", str(2 * 1024 * 1024 * 1024)))  # 2GB 自动切分(可env覆盖便于测试)
 VIDEO_FPS = 25
 AUDIO_BITRATE = 128_000                  # 音轨 128k (aac, 画质优先)
 
