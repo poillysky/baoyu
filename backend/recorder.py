@@ -1134,34 +1134,45 @@ async def _faststart_mp4(mp4):
         return False
 
 
-def _has_moov_front(path, head_bytes=1024 * 1024):
-    """快速校验 mp4 的 moov box 是否在文件前部(索引前置=可秒开)。
-    只顺序读前 head_bytes(默认1MB) 的顶层 box, 发现 moov 在前即 True;
-    先遇到 mdat 说明 moov 在后(未 faststart) 返回 False。"""
+def _has_moov_front(path, head_bytes=16 * 1024 * 1024):
+    """校验 mp4 是否为"索引完整前置"的普通 mp4(可秒开)。
+    返回 True 必须满足: moov 在文件前部, 且 **不含 moof 碎片盒**(非 fragmented)。
+    fragmented mp4(moov 是空壳 758字节 + 一堆 moof/mdat)即使 moov 在前也不是秒开,
+    播放器要边读边拼碎片索引 -> 起播慢, 必须判定为 False(需重新 faststart去碎片)。
+    """
     try:
         sz = os.path.getsize(path)
+        moov_before_mdat = False
         with open(path, "rb") as fh:
             pos = 0
+            # 扫描前 head_bytes(容纳大 moov); 若发现 moof 立刻判定 fragmented=False
             while pos < sz and pos < head_bytes:
                 fh.seek(pos)
                 h = fh.read(8)
                 if len(h) < 8:
-                    return False
+                    break
                 bsize = struct.unpack(">I", h[:4])[0]
                 typ = h[4:8].decode("latin-1")
                 if bsize == 1:
                     ext = fh.read(8)
                     if len(ext) < 8:
-                        return False
+                        break
                     bsize = struct.unpack(">Q", ext)[0]
                 elif bsize == 0:
                     bsize = sz - pos
+                if typ == "moof":
+                    return False          # 碎片化 -> 不合格, 需去碎片
                 if typ == "moov":
-                    return True
+                    moov_before_mdat = True
+                    # moov 若是小空壳(<1KB)也疑似 fragmented, 继续往后找 moof
+                    if bsize > 1024:
+                        pos += bsize
+                        continue
                 if typ == "mdat":
-                    return False
+                    # 遇到 mdat: moov 已前置则到此为止判断(但若后面还有 moof 上面已截)
+                    break
                 pos += max(bsize, 8)
-        return False
+        return moov_before_mdat
     except Exception:
         return False
 
