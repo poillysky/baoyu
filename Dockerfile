@@ -18,8 +18,12 @@ WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r /app/backend/requirements.txt
 
-# Playwright 的 Chromium 已在基础镜像内; 这里再确保浏览器可用(离线场景跳过)
-# RUN python -m playwright install chromium
+# Playwright 的 Chromium 已在基础镜像内, 但开源 Chromium 无 H.264 专利解码器
+# (半糖等推 h264 的流解码不出 -> canvas 黑屏 + 时长错)。装完整版 Google Chrome
+# (自带 H.264 软解), config.py 会优先探测 /usr/bin/google-chrome-stable。
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright/ \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN python -m playwright install chrome || true
 
 COPY backend  /app/backend
 COPY static   /app/static

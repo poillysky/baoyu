@@ -499,7 +499,8 @@ def _tick_inner():
             if not _is_watched(rid):
                 continue
             it = watch.get(rid) or {}
-            # 关闭中的监控房: 不参与自动开录(含拉流), 等待手动启用
+            # 关闭中的监控房: 不参与自动开录(含拉流), 等待手动启用;
+            # 但仍刷新其 online/checked_at 状态(否则列表会误显示为离线), 只是不自动启停录制。
             if it.get("enabled") is False:
                 rec_off = recs_by_room.get(rid)
                 # 轮询中发现关停前遗留的录制任务(如手动托管), 仍按状态机停掉
@@ -509,7 +510,15 @@ def _tick_inner():
                         log("监控已关闭, 停止遗留录制", rid)
                     except Exception:
                         pass
-                    _STATE.pop(rid, None)
+                # 关键: 不 pop, 保留并刷新在线状态, 让列表显示真实在线/离线
+                _online_off = bool(omap.get(rid))
+                _prev_off = _STATE.get(rid, {})
+                _STATE[rid] = {"online": _online_off, "checked_at": time.time(),
+                               "rec_id": (rec_off or {}).get("rec_id"),
+                               "state": (rec_off or {}).get("state"),
+                               "offline_streak": 0 if _online_off else int(_prev_off.get("offline_streak", 0)) + 1,
+                               "restart_cooldown": _prev_off.get("restart_cooldown"),
+                               "last_msg": "监控已关闭" if not _online_off else "监控已关闭(在线)"}
                 continue
             online = bool(omap.get(rid))
             rec = recs_by_room.get(rid)
