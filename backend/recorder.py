@@ -520,19 +520,24 @@ async def _save_current_segment(task, reason="disconnect"):
 
 
 async def _roll_segment(task):
-    """段达 2GB: 收尾当前段 ffmpeg -> 起新段 ffmpeg 继续。"""
+    """段达 2GB: 收尾当前段 ffmpeg -> 立即把旧段归档到最终目录(不等整场录完) -> 起新段继续。
+
+    老大要求: 满 2GB 自动换新文件录制, 旧文件即时转移(机械盘归档), 不留在暂存。
+    """
     seg = task.get("seg", 0)
     old_mp4 = task.get("ff_mp4") or task["mp4_path"]
     await _stop_ff(task, finalize=True)
+    # 旧段立即单段归档(带时间戳区分, 避免 part 名太乱): 原名_时间戳_partN
     if old_mp4 and os.path.exists(old_mp4):
-        task.setdefault("segments", []).append(old_mp4)
+        stem = os.path.splitext(os.path.basename(old_mp4))[0]
+        await _archive_one(task, old_mp4, final_stem=stem)
     task["seg"] = seg + 1
     base_mp4 = task["base_mp4"]
     new_mp4 = base_mp4.replace(".mp4", "_part%d.mp4" % task["seg"])
     task["mp4_path"] = new_mp4
     task["seg_bytes"] = 0
     await _start_ff(task, new_mp4)          # 起新段 ffmpeg
-    log("rolled to segment", task["seg"])
+    log("rolled to segment", task["seg"], "旧段已归档")
     _notify_stats()
 
 
@@ -865,6 +870,47 @@ async def _faststart_mp4(mp4):
         try: os.remove(tmp)
         except Exception: pass
         return False
+
+
+async def _archive_one(task, mp4, final_stem=None):
+    """把单个已收尾的段 faststart 后立即**移动**到 FINAL_REC_DIR(机械盘), 并把它从
+    task["segments"] 里移除(视为已归档、不再参与最终合并), 更新指针。
+
+    用于 2GB 切分: 满 2GB 立刻把旧段转移, 不必等整场录完(老大要的"旧文件转移")。
+    返回归档后的最终路径(dst) 或 None(失败保留暂存, 不丢)。
+    """
+    if not mp4 or not os.path.exists(mp4) or os.path.getsize(mp4) <= 0:
+        return None
+    plat_dir = task.get("plat_dir") or "plat%s" % task.get("plat_id", "0")
+    folder = task.get("folder") or str(task.get("room_id", "room"))
+    fdir = os.path.join(C.FINAL_REC_DIR, plat_dir, folder)
+    try:
+        os.makedirs(fdir, exist_ok=True)
+    except Exception as e:
+        log("归档目录创建失败", fdir, repr(e)); return None
+    try:
+        await _faststart_mp4(mp4)
+        name = os.path.basename(mp4)
+        if final_stem:
+            name = final_stem + ".mp4"
+        dst = os.path.join(fdir, name)
+        if os.path.exists(dst):
+            try: os.remove(dst)
+            except Exception: pass
+        shutil.move(mp4, dst)
+        # 从 segments 移除(已独立归档, 不参与合并)
+        segs = task.get("segments") or []
+        if mp4 in segs:
+            segs.remove(mp4)
+            task["segments"] = segs
+        log("2GB切分 旧段已归档最终目录", dst)
+        try:
+            _rm_empty_dirs(C.REC_DIR)
+        except Exception:
+            pass
+        return dst
+    except Exception as e:
+        log("单段归档失败(保留暂存)", mp4, repr(e)); return None
 
 
 async def _archive_final(task):
