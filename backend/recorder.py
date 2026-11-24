@@ -10,7 +10,7 @@
 - 断连即收尾: 立即把已录 webm 转 mp4, 避免文件丢失
 - 状态变化经 hub 实时推前端
 """
-import asyncio, os, time, json, threading, sys, uuid, glob, shutil
+import asyncio, os, time, json, threading, sys, uuid, glob, shutil, struct
 import config as C
 
 HERE = C.HERE
@@ -1103,7 +1103,7 @@ async def _faststart_mp4(mp4):
 
     fragmented/webm容器混装等一律 `-c copy` 纯流拷贝(零重编码, 画质不变),
     只重写容器头。大文件 IO 走异步子进程不阻塞事件循环。
-    返回 True=已重封装, False=失败(调用方保留原件兜底, 不阻断归档)。
+    返回 True=已重封装且校验到 moov 前置, False=失败(调用方保留原件兜底, 不阻断归档)。
     """
     if not mp4 or not os.path.exists(mp4) or os.path.getsize(mp4) < 4096:
         return False
@@ -1119,6 +1119,12 @@ async def _faststart_mp4(mp4):
             try: os.remove(tmp)
             except Exception: pass
             return False
+        # ★校验重封装结果确实 moov 前置(索引在头部), 否则不当成功
+        if not _has_moov_front(tmp):
+            log("faststart 结果校验未通过(moov 未前置), 保留原件", mp4)
+            try: os.remove(tmp)
+            except Exception: pass
+            return False
         os.replace(tmp, mp4)
         return True
     except Exception as e:
@@ -1126,6 +1132,52 @@ async def _faststart_mp4(mp4):
         try: os.remove(tmp)
         except Exception: pass
         return False
+
+
+def _has_moov_front(path, head_bytes=1024 * 1024):
+    """快速校验 mp4 的 moov box 是否在文件前部(索引前置=可秒开)。
+    只顺序读前 head_bytes(默认1MB) 的顶层 box, 发现 moov 在前即 True;
+    先遇到 mdat 说明 moov 在后(未 faststart) 返回 False。"""
+    try:
+        sz = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            pos = 0
+            while pos < sz and pos < head_bytes:
+                fh.seek(pos)
+                h = fh.read(8)
+                if len(h) < 8:
+                    return False
+                bsize = struct.unpack(">I", h[:4])[0]
+                typ = h[4:8].decode("latin-1")
+                if bsize == 1:
+                    ext = fh.read(8)
+                    if len(ext) < 8:
+                        return False
+                    bsize = struct.unpack(">Q", ext)[0]
+                elif bsize == 0:
+                    bsize = sz - pos
+                if typ == "moov":
+                    return True
+                if typ == "mdat":
+                    return False
+                pos += max(bsize, 8)
+        return False
+    except Exception:
+        return False
+
+
+async def _ensure_faststart(mp4):
+    """确保 mp4 moov 前置(索引在头, 播放秒开)。最多尝试 2 次; 已前置直接返回 True。
+    仍失败则返回 False(文件保留不丢, 由调用方打 WARN, sweep 后续还能再修)。"""
+    if _has_moov_front(mp4):
+        return True
+    for i in range(2):
+        ok = await _faststart_mp4(mp4)
+        if ok and _has_moov_front(mp4):
+            return True
+        await asyncio.sleep(1)
+    log("WARN faststart 多次失败, 文件无前置索引(保留数据, 待 sweep 再修)", mp4)
+    return False
 
 
 async def _archive_one(task, mp4, final_stem=None):
@@ -1145,7 +1197,9 @@ async def _archive_one(task, mp4, final_stem=None):
     except Exception as e:
         log("归档目录创建失败", fdir, repr(e)); return None
     try:
-        await _faststart_mp4(mp4)
+        # 归档前确保 moov 前置(保证播放秒开)。faststart 失败会重试一次; 仍失败则
+        # 保留文件不丢, 但打 WARN 标记(下轮 sweep 还能再修)。绝不物理丢数据。
+        await _ensure_faststart(mp4)
         name = os.path.basename(mp4)
         if final_stem:
             name = final_stem + ".mp4"
@@ -1211,8 +1265,8 @@ async def _archive_final(task):
         if not mp4 or not os.path.exists(mp4) or os.path.getsize(mp4) <= 0:
             continue
         try:
-            # 先转 faststart(moov 前置), 失败保留 fragmented 原件
-            await _faststart_mp4(mp4)
+            # 先转 faststart(moov 前置), 失败重试; 仍失败保留原件(不丢数据, 打WARN)
+            await _ensure_faststart(mp4)
             dst = os.path.join(fdir, os.path.basename(mp4))
             if os.path.exists(dst):
                 os.remove(dst)
