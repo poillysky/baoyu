@@ -31,14 +31,31 @@ _ACC_FILE = os.path.join(HERE, "account_state.json")   # 账号登录态持久�
 
 
 def _save_account():
-    """把账号登录态写盘(原子替换)。"""
+    """把账号登录态写盘。优先原子替换; bind-mount 单文件(os.replace 会 EBUSY)时
+    退化为原地直写(truncate + write), 保证容器内也能持久化会员态。"""
+    payload = json.dumps(_ACC, ensure_ascii=False)
+    tmp = _ACC_FILE + ".tmp"
     try:
-        tmp = _ACC_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(_ACC, f, ensure_ascii=False)
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, _ACC_FILE)
+        return
     except Exception as e:
-        print("[!] 保存账号态失败:", e, flush=True)
+        # 常见: 单文件 bind-mount -> os.replace EBUSY; 改原地直写
+        try:
+            if os.path.exists(tmp):
+                try: os.remove(tmp)
+                except Exception: pass
+            with open(_ACC_FILE, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                try: os.fsync(f.fileno())
+                except Exception: pass
+            return
+        except Exception as e2:
+            print("[!] 保存账号态失败:", repr(e), "| 原地写也失败:", repr(e2), flush=True)
 
 
 def _load_account():
