@@ -141,6 +141,40 @@ def ensure_token(force=False):
         return _STATE["token"]
 
 
+def _token_invalid(resp):
+    """判断响应是否是登录态失效(账号 token 过期/被踢)。"""
+    try:
+        msg = str((resp or {}).get("msg") or "")
+    except Exception:
+        msg = ""
+    return ("登录已失效" in msg) or ("重新登录" in msg) or ("token" in msg.lower() and "失效" in msg)
+
+
+def ensure_fresh(resp):
+    """若上一次接口返回登录失效, 清掉账号态并换新游客 token, 返回是否已刷新。
+    用于 api() 返回后调用: api() 本身不自动重试登录失效(避免递归), 由业务层决定。
+    这里提供统一入口, 大部分调用点(room_detail/rooms)拿到失效时调一次即可。"""
+    if _token_invalid(resp):
+        with _TOKEN_LOCK:
+            # 账号 token 过期: 放弃账号态(会员), 退回游客新号
+            if _ACC.get("token"):
+                print("[!] 账号 Token 失效, 清空账号态改用游客号", flush=True)
+            _ACC["token"] = ""
+            _ACC["info"] = {}
+            try:
+                _save_account()
+            except Exception:
+                pass
+            _STATE["token"] = ""
+            try:
+                _STATE["token"] = new_guest()
+                print("[*] 换新游客 token:", _STATE["token"][:20], flush=True)
+            except Exception as e:
+                print("[!] ensure_fresh new_guest err", e, flush=True)
+        return True
+    return False
+
+
 def switching():
     return bool(_STATE.get("switching"))
 
@@ -198,6 +232,8 @@ def rooms(pid=449, room_type=0, kw=""):
     if kw:
         biz["keyword"] = kw
     r = api("/api/live/plat/detail", biz)
+    if ensure_fresh(r):
+        r = api("/api/live/plat/detail", biz)
     d = r.get("data") or {}
     arr = d.get("room_list", [])
     code = r.get("code")
@@ -214,7 +250,10 @@ def rooms(pid=449, room_type=0, kw=""):
 
 
 def room_detail_raw(room_id, plat_id):
-    return api("/api/live/room/detail", {"id": int(room_id), "plat_id": int(plat_id)})
+    r = api("/api/live/room/detail", {"id": int(room_id), "plat_id": int(plat_id)})
+    if ensure_fresh(r):
+        r = api("/api/live/room/detail", {"id": int(room_id), "plat_id": int(plat_id)})
+    return r
 
 
 def room_detail(room_id, plat_id):

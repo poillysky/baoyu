@@ -236,28 +236,39 @@ async function main(){
     }catch(_){}
   });
 client.on('user-published', async (user, mt)=>{
-    try{ diag({ev:'pub', uid:uidKey(user.uid), mt:mt, n:(window.__STATE__.pubN=(window.__STATE__.pubN||0)+1), ms:performance.now()|0}); }catch(e){}
+    try{ diag({ev:'pub', uid:uidKey(user.uid), mt:mt, hasAT:!!(user.audioTrack), hasVT:!!(user.videoTrack), n:(window.__STATE__.pubN=(window.__STATE__.pubN||0)+1), ms:performance.now()|0}); }catch(e){}
     try{ await client.subscribe(user, mt); }catch(e){}
-    if(mt==='video'){
-      try{ client.setRemoteVideoStreamType(user.uid, 0); }catch(e){}
-      setupVideo(user.uid, user.videoTrack);
-      // 主播锁定: 强制匹配 real_room_id(见 _evalMaster); 目标 uid 出了真帧即锁
-      if(masterUid===null){ ensureLockTimer(); }
-      // 主播重新发布(重连/换轨)时, 若是当前主身份则重置失联计时
-      if(masterUid!==null && uidKey(user.uid)===masterUid){ _masterLostAt=0; }
-      // 只在还没开录时置 video-ready 并尝试开录; 已在 recording 不得重置状态
-      // (否则后端轮询等不到 recording 会 25s 超时误杀页面 -> 无限重启)
-      if(!recStarted){ st('video-ready'); tryStartRecord(); }
+    // ★若本次只回调了 video 但 user 带 audioTrack(hasAT) 或反之, 主动补订另一路,
+    //   否则另一路 audioTrack/videoTrack 是空壳, getMediaStreamTrack() 取不到有效轨。
+    if(mt==='video' && user.audioTrack){ try{ await client.subscribe(user,'audio'); }catch(e){} }
+    if(mt==='audio' && user.videoTrack){ try{ await client.subscribe(user,'video'); }catch(e){} }
+    // ★关键: 半糖等平台 音频和视频可能在同一帧 publish, SDK 只回调 mt:'video' 一次,
+    //   audioTrack 挂在这个 user 对象上(hasAT:true) 而不会单独触发 mt:'audio'。
+    //   也有反过来只回调 mt:'audio' 但带 videoTrack 的情况。所以不看 mt, 只要
+    //   user 上有 audioTrack / videoTrack 就分别处理, 保证音视频都不漏。
+    const at = user.audioTrack;
+    const vt = user.videoTrack;
+    if(mt==='video' || vt){
+      if(vt){
+        try{ client.setRemoteVideoStreamType(user.uid, 0); }catch(e){}
+        setupVideo(user.uid, vt);
+        if(masterUid===null){ ensureLockTimer(); }
+        if(masterUid!==null && uidKey(user.uid)===masterUid){ _masterLostAt=0; }
+        if(!recStarted){ st('video-ready'); tryStartRecord(); }
+      }
     }
-    if(mt==='audio'){
-      const mt2 = user.audioTrack && user.audioTrack.getMediaStreamTrack && user.audioTrack.getMediaStreamTrack();
+    if(at){
+      const mt2 = at.getMediaStreamTrack && at.getMediaStreamTrack();
       if(mt2){
         audioTracks[uidKey(user.uid)] = mt2;
-        if(masterUid===uidKey(user.uid)){ activateAudio(user.uid, mt2); }
+        window.__STATE__.audio=true;
+        audioAny=true;
+        // 若该 uid 已是主主播(或尚未锁定且它是首个) -> 激活音频
+        if(masterUid===null && !TARGET){ _doLock(uidKey(user.uid),'audio-first'); activateAudio(user.uid, mt2); }
+        else if(masterUid===uidKey(user.uid)){ activateAudio(user.uid, mt2); }
+        else if(masterUid===null && TARGET===uidKey(user.uid)){ _doLock(TARGET,'realroom-match'); activateAudio(user.uid, mt2); }
+        tryStartRecord();
       }
-      window.__STATE__.audio=true;
-      audioAny=true;
-      tryStartRecord();
     }
   });
   client.on('user-unpublished', async (user, mt)=>{
