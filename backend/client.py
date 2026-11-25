@@ -60,27 +60,34 @@ def _load_account():
 _ACC_MOBILE = os.environ.get("BAOYU_ACCOUNT_MOBILE", "").strip()
 _ACC_PASS = os.environ.get("BAOYU_ACCOUNT_PASS", "").strip()
 _member_inited = {"tried": False}
+_MEMBER_LOCK = threading.Lock()   # 串行化会员登录, 防并发重复登录/游客覆盖
 
 
 def ensure_member():
     """若配置了会员账号且当前不是会员身份, 自动登录一次会员。
-    返回 True 表示当前是会员身份。登录成功持久化到 _ACC。"""
+    返回 True 表示当前是会员身份。登录成功持久化到 _ACC。
+    用 _MEMBER_LOCK 串行, 保证并发调用只登录一次, 且登录完成前不落游客分支。"""
     if _ACC.get("token"):
         return True
     if not (_ACC_MOBILE and _ACC_PASS):
         return False
-    if _member_inited["tried"]:
-        return bool(_ACC.get("token"))
-    _member_inited["tried"] = True
-    try:
-        r = login_account(mobile=_ACC_MOBILE, password=_ACC_PASS, login_type="mobile")
+    with _MEMBER_LOCK:
+        # 二次检查: 等锁期间可能已被别的线程登录
         if _ACC.get("token"):
-            print("[*] 会员账号自动登录成功:", _ACC_MOBILE, flush=True)
             return True
-        print("[!] 会员账号自动登录失败: code=%s msg=%s" % (r.get("code"), r.get("msg")), flush=True)
-    except Exception as e:
-        print("[!] 会员账号自动登录异常:", e, flush=True)
-    return False
+        if _member_inited["tried"] and not _ACC.get("token"):
+            # 已尝试过且没成功, 不再反复登录(避免卡死), 除非 token 被清且允许重试
+            return bool(_ACC.get("token"))
+        _member_inited["tried"] = True
+        try:
+            r = login_account(mobile=_ACC_MOBILE, password=_ACC_PASS, login_type="mobile")
+            if _ACC.get("token"):
+                print("[*] 会员账号自动登录成功:", _ACC_MOBILE, flush=True)
+                return True
+            print("[!] 会员账号自动登录失败: code=%s msg=%s" % (r.get("code"), r.get("msg")), flush=True)
+        except Exception as e:
+            print("[!] 会员账号自动登录异常:", e, flush=True)
+        return bool(_ACC.get("token"))
 _TOKEN_LOCK = threading.Lock()
 _SWITCH_LOCK = threading.Lock()
 _QUOTA_HINT = "次数不足"
@@ -164,6 +171,10 @@ def ensure_token(force=False):
         if force or not _STATE["token"] or len(_STATE["token"]) < 20:
             need = True
         if not need:
+            # 已是会员身份(_ACC 有 token 且 _STATE==它) 直接返回; 否则若 _ACC 有 token 但 _STATE 是游客, 切回会员
+            if _ACC.get("token") and _STATE["token"] != _ACC["token"]:
+                _STATE["token"] = _ACC["token"]
+                print("[*] 切回会员身份 token:", _STATE["token"][:20], flush=True)
             return _STATE["token"]
     # 优先用会员账号(有额度), 没有再退回游客
     try:
@@ -177,6 +188,10 @@ def ensure_token(force=False):
     try:
         tok = new_guest()
         with _TOKEN_LOCK:
+            # 防覆盖: 出锁期间若已被会员登录设了 _STATE, 不要用游客覆盖
+            if _ACC.get("token"):
+                _STATE["token"] = _ACC["token"]
+                return _STATE["token"]
             _STATE["token"] = tok
         print("[*] guest token ready:", tok[:20], flush=True)
     except Exception as e:

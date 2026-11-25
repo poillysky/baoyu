@@ -19,7 +19,7 @@ services:
       # 3) 最终完整文件归档 —— 机械硬盘, 录完整一次性写入
       - ${FINAL_REC_HOST:-./recordings}:/app/final_recordings
       - ./backend/kiwi_identity.json:/app/backend/kiwi_identity.json:ro
-      - ./backend/account_state.json:/app/backend/account_state.json:ro
+      - ./backend/account_state.json:/app/backend/account_state.json
       - ./backend/watchlist.json:/app/backend/watchlist.json
     environment:
       - TZ=Asia/Shanghai
