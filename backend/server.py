@@ -977,27 +977,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    # 容器内 Python 是 PID 1: 不自动回收子进程 -> chrome/crashpad 僵尸越积越多。
-    # 把 SIGCHLD 设为 SIG_IGN, 让内核自动 reap 已退出的子进程(僵尸不再堆积)。
-    try:
-        import signal as _sig
-        _sig.signal(_sig.SIGCHLD, _sig.SIG_IGN)
-    except Exception:
-        pass
-    # 兜底: 后台定期 reap(某些 libc 对 SIG_IGN+SIGCHLD 行为不同, 双保险)
-    try:
-        import threading as _th, os as _os
-        def _reap():
-            while True:
-                try:
-                    while _os.waitpid(-1, _os.WNOHANG)[0] > 0:
-                        pass
-                except Exception:
-                    pass
-                time.sleep(30)
-        _th.Thread(target=_reap, daemon=True).start()
-    except Exception:
-        pass
+    # 子进程回收: 镜像用 tini 作 PID 1 负责 reap 僵尸(chrome/crashpad 等), 应用层
+    # 不再手动 SIGCHLD=SIG_IGN / waitpid 线程 —— 那会与 asyncio.create_subprocess_exec
+    # 抢回收 ffmpeg 子进程, 导致 faststart/transcode 拿不到退出码而误判失败。
+    pass
     # 不要在此同步等待登录(会员登录是网络请求, 慢会阻塞 server 起来)。
     # 会员/游客 token 在首次真正调业务接口时由 client.ensure_token() 懒加载。
     # 后台异步预热一次会员登录(失败不影响 server 启动)。

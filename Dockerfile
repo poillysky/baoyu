@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # 国内 apt 镜像(阿里)
 RUN sed -i 's@http://archive.ubuntu.com@https://mirrors.aliyun.com@g; s@http://security.ubuntu.com@https://mirrors.aliyun.com@g' /etc/apt/sources.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg tzdata \
+    && apt-get install -y --no-install-recommends ffmpeg tzdata tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -45,4 +45,4 @@ ENV SINGLE_BROWSER=1 \
 EXPOSE 8900 8902 8903
 
 WORKDIR /app/backend
-CMD ["python3", "server.py"]
+CMD ["tini", "--", "python3", "server.py"]
