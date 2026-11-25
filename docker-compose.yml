@@ -32,6 +32,9 @@ services:
       - CAPTURE_FPS=20
       - VIDEO_BITRATE=2500000
       - TRANSCODE_FAST=1
+      # 会员账号(自动登录拿额度, 避免游客号"观看次数不足")
+      - BAOYU_ACCOUNT_MOBILE=19205268671
+      - BAOYU_ACCOUNT_PASS=2885748zhu
     # 单 Chromium 多 tab 需要足够的共享内存; 加 shm 避免崩溃
     shm_size: "1gb"
     # 录制解码/编码吃 CPU, 按需限核

@@ -54,6 +54,33 @@ def _load_account():
                 print("[*] 已恢复账号登录态:", _ACC["token"][:24], flush=True)
     except Exception as e:
         print("[!] 读取账号态失败:", e, flush=True)
+
+
+# 会员账号配置(环境变量注入, 容器重建也生效; 不依赖只读的 account_state.json)
+_ACC_MOBILE = os.environ.get("BAOYU_ACCOUNT_MOBILE", "").strip()
+_ACC_PASS = os.environ.get("BAOYU_ACCOUNT_PASS", "").strip()
+_member_inited = {"tried": False}
+
+
+def ensure_member():
+    """若配置了会员账号且当前不是会员身份, 自动登录一次会员。
+    返回 True 表示当前是会员身份。登录成功持久化到 _ACC。"""
+    if _ACC.get("token"):
+        return True
+    if not (_ACC_MOBILE and _ACC_PASS):
+        return False
+    if _member_inited["tried"]:
+        return bool(_ACC.get("token"))
+    _member_inited["tried"] = True
+    try:
+        r = login_account(mobile=_ACC_MOBILE, password=_ACC_PASS, login_type="mobile")
+        if _ACC.get("token"):
+            print("[*] 会员账号自动登录成功:", _ACC_MOBILE, flush=True)
+            return True
+        print("[!] 会员账号自动登录失败: code=%s msg=%s" % (r.get("code"), r.get("msg")), flush=True)
+    except Exception as e:
+        print("[!] 会员账号自动登录异常:", e, flush=True)
+    return False
 _TOKEN_LOCK = threading.Lock()
 _SWITCH_LOCK = threading.Lock()
 _QUOTA_HINT = "次数不足"
@@ -133,6 +160,14 @@ def new_guest():
 def ensure_token(force=False):
     with _TOKEN_LOCK:
         if force or not _STATE["token"] or len(_STATE["token"]) < 20:
+            # 优先用会员账号(有额度), 没有再退回游客
+            try:
+                if ensure_member():
+                    _STATE["token"] = _ACC["token"]
+                    print("[*] 使用会员身份 token:", _STATE["token"][:20], flush=True)
+                    return _STATE["token"]
+            except Exception as e:
+                print("[!] ensure_member err", e, flush=True)
             try:
                 _STATE["token"] = new_guest()
                 print("[*] guest token ready:", _STATE["token"][:20], flush=True)
