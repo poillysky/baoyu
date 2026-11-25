@@ -158,22 +158,30 @@ def new_guest():
 
 
 def ensure_token(force=False):
+    # 先在锁内做快速判断, 需要刷新时再出锁做网络请求(避免持锁做登录导致死锁/长时间阻塞)
+    need = False
     with _TOKEN_LOCK:
         if force or not _STATE["token"] or len(_STATE["token"]) < 20:
-            # 优先用会员账号(有额度), 没有再退回游客
-            try:
-                if ensure_member():
-                    _STATE["token"] = _ACC["token"]
-                    print("[*] 使用会员身份 token:", _STATE["token"][:20], flush=True)
-                    return _STATE["token"]
-            except Exception as e:
-                print("[!] ensure_member err", e, flush=True)
-            try:
-                _STATE["token"] = new_guest()
-                print("[*] guest token ready:", _STATE["token"][:20], flush=True)
-            except Exception as e:
-                print("[!] ensure_token err", e, flush=True)
-        return _STATE["token"]
+            need = True
+        if not need:
+            return _STATE["token"]
+    # 优先用会员账号(有额度), 没有再退回游客
+    try:
+        if ensure_member():
+            with _TOKEN_LOCK:
+                _STATE["token"] = _ACC["token"]
+                print("[*] 使用会员身份 token:", _STATE["token"][:20], flush=True)
+                return _STATE["token"]
+    except Exception as e:
+        print("[!] ensure_member err", e, flush=True)
+    try:
+        tok = new_guest()
+        with _TOKEN_LOCK:
+            _STATE["token"] = tok
+        print("[*] guest token ready:", tok[:20], flush=True)
+    except Exception as e:
+        print("[!] ensure_token err", e, flush=True)
+    return _STATE["token"]
 
 
 def _token_invalid(resp):

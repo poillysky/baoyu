@@ -998,7 +998,19 @@ def main():
         _th.Thread(target=_reap, daemon=True).start()
     except Exception:
         pass
-    CL.ensure_token()
+    # 不要在此同步等待登录(会员登录是网络请求, 慢会阻塞 server 起来)。
+    # 会员/游客 token 在首次真正调业务接口时由 client.ensure_token() 懒加载。
+    # 后台异步预热一次会员登录(失败不影响 server 启动)。
+    try:
+        import threading as _th2
+        def _warm():
+            try:
+                CL.ensure_token()
+            except Exception as _e:
+                print("[SERVER] warm token err:", _e, flush=True)
+        _th2.Thread(target=_warm, daemon=True).start()
+    except Exception:
+        pass
     HUB.set_snapshot_provider(_snapshot)
     HUB.start()
     REC.ws_port()  # 预热录制分片 WS
